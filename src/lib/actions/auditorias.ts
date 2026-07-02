@@ -390,6 +390,11 @@ export async function finalizarAuditoria(input: FinalizarAuditoriaInput) {
             .from('auditoria_respostas')
             .update({ ocorrencia_id: ocorrencia.id })
             .eq('id', respostaSalva.id)
+
+          await supabase
+            .from('checklist_fotos')
+            .update({ ocorrencia_id: ocorrencia.id })
+            .eq('resposta_id', respostaSalva.id)
         }
       } else if (resp.continua_igual) {
         // Mesmo sem mudança, atualiza a data_atualizacao para rastrear que foi conferido

@@ -27,7 +27,7 @@ export async function listarOcorrencias(filtros?: FiltrosOcorrencia) {
     .from('ocorrencias')
     .select(`
       id, numero, descricao, gravidade, responsavel, prazo, status,
-      criado_em, data_resolucao,
+      criado_em, data_resolucao, checklist_id, auditoria_id, item_id,
       veiculos(id, placa, codigo_frota, tipo),
       checklist_items(id, nome),
       checklist_fotos(id, storage_path)
@@ -92,7 +92,7 @@ export async function buscarOcorrencia(id: string) {
     .from('ocorrencias')
     .select(`
       id, numero, descricao, gravidade, responsavel, prazo, status,
-      criado_em, data_resolucao,
+      criado_em, data_resolucao, checklist_id, auditoria_id, item_id,
       veiculos(id, placa, codigo_frota, tipo, fabricante, modelo),
       checklist_items(
         id, nome, item_critico,
@@ -129,12 +129,63 @@ export async function buscarOcorrencia(id: string) {
     perfisMap = new Map((perfis ?? []).map((p) => [p.user_id, p.nome]))
   }
 
-  // Busca fotos da ocorrência
-  const { data: fotos } = await supabase
+  // Busca fotos da ocorrência.
+  // Regra nova: fotos futuras ficam vinculadas diretamente em checklist_fotos.ocorrencia_id.
+  // Regra de compatibilidade: ocorrências já criadas antes do ajuste podem ter fotos
+  // somente na resposta do checklist/auditoria. Por isso também buscamos pelo item de origem.
+  const fotosMap = new Map<string, { id: string; storage_path: string; nome_original: string; criado_em: string }>()
+
+  const { data: fotosDiretas } = await supabase
     .from('checklist_fotos')
     .select('id, storage_path, nome_original, criado_em')
     .eq('ocorrencia_id', id)
     .order('criado_em', { ascending: true })
+
+  for (const foto of fotosDiretas ?? []) fotosMap.set(foto.id, foto)
+
+  const origem = ocorrencia as unknown as {
+    checklist_id: string | null
+    auditoria_id: string | null
+    item_id: string | null
+  }
+
+  if (origem.item_id && origem.checklist_id) {
+    const { data: respostasOrigem } = await supabase
+      .from('checklist_respostas')
+      .select('id')
+      .eq('checklist_id', origem.checklist_id)
+      .eq('item_id', origem.item_id)
+
+    const respostaIds = (respostasOrigem ?? []).map((r) => r.id)
+    if (respostaIds.length > 0) {
+      const { data: fotosOrigem } = await supabase
+        .from('checklist_fotos')
+        .select('id, storage_path, nome_original, criado_em')
+        .in('resposta_id', respostaIds)
+        .order('criado_em', { ascending: true })
+
+      for (const foto of fotosOrigem ?? []) fotosMap.set(foto.id, foto)
+    }
+  }
+
+  if (origem.item_id && origem.auditoria_id) {
+    const { data: respostasOrigem } = await supabase
+      .from('auditoria_respostas')
+      .select('id')
+      .eq('auditoria_id', origem.auditoria_id)
+      .eq('item_id', origem.item_id)
+
+    const respostaIds = (respostasOrigem ?? []).map((r) => r.id)
+    if (respostaIds.length > 0) {
+      const { data: fotosOrigem } = await supabase
+        .from('checklist_fotos')
+        .select('id, storage_path, nome_original, criado_em')
+        .in('resposta_id', respostaIds)
+        .order('criado_em', { ascending: true })
+
+      for (const foto of fotosOrigem ?? []) fotosMap.set(foto.id, foto)
+    }
+  }
 
   return {
     ocorrencia,
@@ -142,7 +193,9 @@ export async function buscarOcorrencia(id: string) {
       ...h,
       nome_usuario: perfisMap.get(h.feito_por) ?? 'Usuário',
     })),
-    fotos: fotos ?? [],
+    fotos: [...fotosMap.values()].sort(
+      (a, b) => new Date(a.criado_em).getTime() - new Date(b.criado_em).getTime()
+    ),
   }
 }
 

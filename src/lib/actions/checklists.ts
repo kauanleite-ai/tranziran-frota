@@ -283,11 +283,18 @@ export async function finalizarChecklist(input: FinalizarChecklistInput) {
 
         if (errOcorrencia) throw new Error(`Erro ao criar ocorrência: ${errOcorrencia.message}`)
 
-        // Vincula a ocorrência de volta à resposta
+        // Vincula a ocorrência de volta à resposta e às fotos daquele item.
+        // Sem isso, a ocorrência é aberta corretamente, mas a tela de detalhes
+        // não consegue exibir as fotos tiradas no checklist.
         await supabase
           .from('checklist_respostas')
           .update({ ocorrencia_id: ocorrencia.id })
           .eq('id', respostaSalva.id)
+
+        await supabase
+          .from('checklist_fotos')
+          .update({ ocorrencia_id: ocorrencia.id })
+          .eq('resposta_id', respostaSalva.id)
       }
     }
 
