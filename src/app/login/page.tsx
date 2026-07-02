@@ -21,7 +21,7 @@ export default function LoginPage() {
 
     const supabase = createClient()
 
-    const { error } = await supabase.auth.signInWithPassword({
+    const { data, error } = await supabase.auth.signInWithPassword({
       email,
       password: senha,
     })
@@ -30,6 +30,22 @@ export default function LoginPage() {
       setErro('E-mail ou senha inválidos.')
       setCarregando(false)
       return
+    }
+
+    const userId = data.user?.id
+
+    if (userId) {
+      const { data: perfil } = await supabase
+        .from('usuarios_perfis')
+        .select('perfil')
+        .eq('user_id', userId)
+        .maybeSingle()
+
+      if (perfil?.perfil === 'motorista' || perfil?.perfil === 'conferente') {
+        router.push('/mobile')
+        router.refresh()
+        return
+      }
     }
 
     router.push('/dashboard')

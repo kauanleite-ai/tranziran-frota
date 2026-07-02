@@ -17,6 +17,7 @@ export default async function MobileHomePage() {
   ])
 
   const nome = perfil?.nome || user?.email || 'Usuário'
+  const podeVerPainelAdmin = ['admin', 'frota', 'gestor', 'auditor', 'manutencao'].includes(perfil?.perfil || '')
 
   return (
     <div className="flex min-h-screen flex-col">
@@ -79,15 +80,17 @@ export default async function MobileHomePage() {
               <p className="text-xs text-slate-500">Últimos checklists sincronizados</p>
             </div>
           </Link>
-          <Link href="/dashboard" className="flex items-center gap-3 rounded-2xl border border-slate-200 bg-white p-4 active:bg-slate-50">
-            <div className="flex h-11 w-11 items-center justify-center rounded-2xl bg-slate-100 text-slate-600">
-              <LayoutDashboard className="h-5 w-5" />
-            </div>
-            <div>
-              <p className="text-sm font-bold text-slate-900">Painel administrativo</p>
-              <p className="text-xs text-slate-500">Voltar para o sistema completo</p>
-            </div>
-          </Link>
+          {podeVerPainelAdmin && (
+            <Link href="/dashboard" className="flex items-center gap-3 rounded-2xl border border-slate-200 bg-white p-4 active:bg-slate-50">
+              <div className="flex h-11 w-11 items-center justify-center rounded-2xl bg-slate-100 text-slate-600">
+                <LayoutDashboard className="h-5 w-5" />
+              </div>
+              <div>
+                <p className="text-sm font-bold text-slate-900">Painel administrativo</p>
+                <p className="text-xs text-slate-500">Voltar para o sistema completo</p>
+              </div>
+            </Link>
+          )}
         </section>
       </div>
     </div>

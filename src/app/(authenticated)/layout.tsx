@@ -23,6 +23,12 @@ export default async function AuthenticatedLayout({
     .eq('user_id', user.id)
     .single() as { data: { nome: string; perfil: string } | null }
 
+  const perfilOperacional = perfil?.perfil === 'motorista' || perfil?.perfil === 'conferente'
+
+  if (perfilOperacional) {
+    redirect('/mobile')
+  }
+
   return (
     <div className="flex min-h-screen bg-slate-50">
       <Sidebar
