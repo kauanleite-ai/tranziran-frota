@@ -1,0 +1,31 @@
+PATCH SMTP - ENVIO DE E-MAIL DE OCORRÊNCIAS
+
+Este patch troca o envio de e-mail para suportar SMTP/Gmail/Google Workspace, sem precisar verificar domínio no Resend.
+
+Arquivos incluídos:
+- package.json
+- package-lock.json
+- .env.example
+- src/lib/email/ocorrencias.ts
+- src/app/(authenticated)/ocorrencias/[id]/OcorrenciaDetalheCliente.tsx
+
+Depois de aplicar:
+1) Rode npm install para instalar nodemailer.
+2) Configure as variáveis na Vercel:
+
+EMAIL_PROVIDER=smtp
+SMTP_HOST=smtp.gmail.com
+SMTP_PORT=465
+SMTP_SECURE=true
+SMTP_USER=kauan.leite@tranziran.com
+SMTP_PASS=SENHA_DE_APP_DO_GOOGLE
+EMAIL_FROM=Kauan Leite <kauan.leite@tranziran.com>
+MANUTENCAO_EMAILS=adonai.souza@tranziran.com.br,manutencao@tranziran.com.br,vitor.cabral@tranziran.com,frota@tranziran.com.br,luiz.carvalho@tranziran.com,rafael.pereira@tranziran.com
+
+3) Faça redeploy na Vercel.
+4) Teste abrindo/encaminhando uma ocorrência.
+
+IMPORTANTE:
+- SMTP_PASS deve ser a senha de app do Google, não a senha normal do e-mail.
+- Não coloque SMTP_PASS em arquivos enviados para o GitHub.
+- Depois de validar, se a senha foi compartilhada fora da Vercel, gere outra senha de app.

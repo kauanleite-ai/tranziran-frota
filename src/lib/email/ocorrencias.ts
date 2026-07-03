@@ -6,6 +6,13 @@ const STATUS_BLOQUEIO = {
   tratativa: 'encaminhado_manutencao',
 } as const
 
+type EmailSendResult = {
+  emailStatus: 'enviado' | 'pendente_configuracao' | 'erro'
+  provider: 'smtp' | 'resend' | null
+  providerId: string | null
+  erro: string | null
+}
+
 function appUrl() {
   if (process.env.NEXT_PUBLIC_APP_URL) return process.env.NEXT_PUBLIC_APP_URL.replace(/\/$/, '')
   if (process.env.VERCEL_URL) return `https://${process.env.VERCEL_URL}`
@@ -34,6 +41,134 @@ function escapeHtml(valor: unknown) {
     .replaceAll('>', '&gt;')
     .replaceAll('"', '&quot;')
     .replaceAll("'", '&#039;')
+}
+
+function parseBoolean(valor?: string | null) {
+  return ['true', '1', 'yes', 'sim', 's'].includes(String(valor ?? '').trim().toLowerCase())
+}
+
+function smtpConfigurado() {
+  return Boolean(process.env.SMTP_HOST && process.env.SMTP_USER && process.env.SMTP_PASS && process.env.EMAIL_FROM)
+}
+
+function resendConfigurado() {
+  return Boolean(process.env.RESEND_API_KEY && process.env.EMAIL_FROM)
+}
+
+async function enviarEmailSmtp({
+  to,
+  subject,
+  html,
+}: {
+  to: string[]
+  subject: string
+  html: string
+}): Promise<EmailSendResult> {
+  const nodemailer = await import('nodemailer')
+  const port = Number(process.env.SMTP_PORT ?? '465')
+
+  const transporter = nodemailer.createTransport({
+    host: process.env.SMTP_HOST,
+    port,
+    secure: process.env.SMTP_SECURE ? parseBoolean(process.env.SMTP_SECURE) : port === 465,
+    auth: {
+      user: process.env.SMTP_USER,
+      pass: process.env.SMTP_PASS,
+    },
+  })
+
+  const info = await transporter.sendMail({
+    from: process.env.EMAIL_FROM,
+    to,
+    subject,
+    html,
+  })
+
+  return {
+    emailStatus: 'enviado',
+    provider: 'smtp',
+    providerId: info.messageId ?? null,
+    erro: null,
+  }
+}
+
+async function enviarEmailResend({
+  to,
+  subject,
+  html,
+}: {
+  to: string[]
+  subject: string
+  html: string
+}): Promise<EmailSendResult> {
+  const resp = await fetch('https://api.resend.com/emails', {
+    method: 'POST',
+    headers: {
+      Authorization: `Bearer ${process.env.RESEND_API_KEY}`,
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify({
+      from: process.env.EMAIL_FROM,
+      to,
+      subject,
+      html,
+    }),
+  })
+
+  const json = await resp.json().catch(() => ({}))
+  if (!resp.ok) throw new Error(json?.message ?? `Erro HTTP ${resp.status}`)
+
+  return {
+    emailStatus: 'enviado',
+    provider: 'resend',
+    providerId: json?.id ?? null,
+    erro: null,
+  }
+}
+
+async function enviarEmailManutencao({
+  to,
+  subject,
+  html,
+}: {
+  to: string[]
+  subject: string
+  html: string
+}): Promise<EmailSendResult> {
+  if (!to.length || !process.env.EMAIL_FROM) {
+    return {
+      emailStatus: 'pendente_configuracao',
+      provider: null,
+      providerId: null,
+      erro: 'Configure EMAIL_FROM e MANUTENCAO_EMAILS para envio real.',
+    }
+  }
+
+  const providerPreferido = (process.env.EMAIL_PROVIDER ?? '').trim().toLowerCase()
+
+  try {
+    if ((providerPreferido === 'smtp' || !providerPreferido) && smtpConfigurado()) {
+      return await enviarEmailSmtp({ to, subject, html })
+    }
+
+    if ((providerPreferido === 'resend' || !providerPreferido) && resendConfigurado()) {
+      return await enviarEmailResend({ to, subject, html })
+    }
+
+    return {
+      emailStatus: 'pendente_configuracao',
+      provider: null,
+      providerId: null,
+      erro: 'Nenhum provedor de e-mail configurado. Configure SMTP ou Resend.',
+    }
+  } catch (err) {
+    return {
+      emailStatus: 'erro',
+      provider: smtpConfigurado() ? 'smtp' : resendConfigurado() ? 'resend' : null,
+      providerId: null,
+      erro: err instanceof Error ? err.message : 'Erro desconhecido ao enviar e-mail.',
+    }
+  }
 }
 
 async function signedChecklistUrls(paths: string[]) {
@@ -122,46 +257,21 @@ export async function encaminharOcorrenciaParaManutencao(ocorrenciaId: string) {
   `
 
   const destinatarios = destinatariosManutencao()
-  let emailStatus = 'pendente_configuracao'
-  let providerId: string | null = null
-  let erro: string | null = null
-
-  if (destinatarios.length > 0 && process.env.RESEND_API_KEY && process.env.EMAIL_FROM) {
-    try {
-      const resp = await fetch('https://api.resend.com/emails', {
-        method: 'POST',
-        headers: {
-          Authorization: `Bearer ${process.env.RESEND_API_KEY}`,
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({
-          from: process.env.EMAIL_FROM,
-          to: destinatarios,
-          subject: assunto,
-          html: corpoHtml,
-        }),
-      })
-
-      const json = await resp.json().catch(() => ({}))
-      if (!resp.ok) throw new Error(json?.message ?? `Erro HTTP ${resp.status}`)
-
-      providerId = json?.id ?? null
-      emailStatus = 'enviado'
-    } catch (err) {
-      emailStatus = 'erro'
-      erro = err instanceof Error ? err.message : 'Erro desconhecido ao enviar e-mail.'
-    }
-  }
+  const envio = await enviarEmailManutencao({
+    to: destinatarios,
+    subject: assunto,
+    html: corpoHtml,
+  })
 
   await supabase.from('ocorrencia_email_logs').insert({
     ocorrencia_id: ocorrenciaId,
     destinatarios,
     assunto,
     corpo_html: corpoHtml,
-    status: emailStatus,
-    provider: process.env.RESEND_API_KEY ? 'resend' : null,
-    provider_id: providerId,
-    erro,
+    status: envio.emailStatus,
+    provider: envio.provider,
+    provider_id: envio.providerId,
+    erro: envio.erro,
   })
 
   await supabase
@@ -169,11 +279,11 @@ export async function encaminharOcorrenciaParaManutencao(ocorrenciaId: string) {
     .update({
       status: 'aguardando_manutencao' as never,
       status_tratativa: STATUS_BLOQUEIO.tratativa,
-      email_enviado_em: emailStatus === 'enviado' ? new Date().toISOString() : null,
+      email_enviado_em: envio.emailStatus === 'enviado' ? new Date().toISOString() : null,
       email_destinatarios: destinatarios,
-      email_status: emailStatus,
-      email_erro: erro,
-      protocolo_email: providerId,
+      email_status: envio.emailStatus,
+      email_erro: envio.erro,
+      protocolo_email: envio.providerId,
       data_encaminhado_manutencao: new Date().toISOString(),
     })
     .eq('id', ocorrenciaId)
@@ -189,5 +299,11 @@ export async function encaminharOcorrenciaParaManutencao(ocorrenciaId: string) {
     })
     .eq('id', ocorrencia.veiculo_id)
 
-  return { emailStatus, destinatarios, providerId, erro, linkManutencao }
+  return {
+    emailStatus: envio.emailStatus,
+    destinatarios,
+    providerId: envio.providerId,
+    erro: envio.erro,
+    linkManutencao,
+  }
 }

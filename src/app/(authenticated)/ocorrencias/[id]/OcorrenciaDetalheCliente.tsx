@@ -159,7 +159,7 @@ export function OcorrenciaDetalheCliente({ dados }: Props) {
     try {
       const res = await reenviarEmailManutencao(ocorrencia.id)
       if (res.emailStatus === 'enviado') success('E-mail enviado para manutenção.')
-      else if (res.emailStatus === 'pendente_configuracao') success('Encaminhamento registrado. Configure RESEND_API_KEY, EMAIL_FROM e MANUTENCAO_EMAILS para envio real.')
+      else if (res.emailStatus === 'pendente_configuracao') success('Encaminhamento registrado. Configure SMTP ou Resend, EMAIL_FROM e MANUTENCAO_EMAILS para envio real.')
       else toastError(res.erro ?? 'Não foi possível enviar o e-mail, mas o encaminhamento foi registrado.')
       router.refresh()
     } catch (err) {
