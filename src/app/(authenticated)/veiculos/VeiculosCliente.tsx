@@ -14,7 +14,7 @@ import { useToast } from '@/components/ui/Toast'
 import { VeiculoForm } from '@/components/veiculos/VeiculoForm'
 import { criarVeiculo, atualizarVeiculo, excluirVeiculo, importarVeiculosEmMassa } from '@/lib/actions/veiculos'
 import type { VeiculoFormData } from '@/lib/actions/veiculos'
-import { TIPO_VEICULO_LABEL, STATUS_VEICULO_LABEL } from '@/lib/constants'
+import { TIPO_VEICULO_LABEL, STATUS_VEICULO_LABEL, STATUS_OPERACIONAL_LABEL } from '@/lib/constants'
 import { baixarCsv, normalizarTexto, parseCsv } from '@/lib/csv'
 import { formatarData, diasAteVencer } from '@/utils'
 
@@ -30,6 +30,9 @@ type Veiculo = {
   km_atual: number | null
   checklist_base_concluido: boolean
   data_proxima_auditoria: string | null
+  status_operacional?: string
+  bloqueado_checklist?: boolean
+  bloqueio_motivo?: string | null
   empresas: { id: string; nome: string } | null
   unidades: { id: string; nome: string } | null
 }
@@ -311,6 +314,18 @@ ${resultado.erros.slice(0, 20).map((e) => `Linha ${e.linha}: ${e.mensagem}`).joi
                 <Badge variant={statusBadge[v.status] ?? 'gray'}>
                   {STATUS_VEICULO_LABEL[v.status as keyof typeof STATUS_VEICULO_LABEL] ?? v.status}
                 </Badge>
+              ),
+            },
+            {
+              key: 'status_operacional',
+              label: 'Operacional',
+              render: (v) => (
+                <div className="space-y-1">
+                  <Badge variant={v.bloqueado_checklist ? 'red' : 'green'}>
+                    {STATUS_OPERACIONAL_LABEL[v.status_operacional as keyof typeof STATUS_OPERACIONAL_LABEL] ?? 'Liberado'}
+                  </Badge>
+                  {v.bloqueio_motivo && <p className="max-w-[220px] truncate text-[11px] text-slate-400" title={v.bloqueio_motivo}>{v.bloqueio_motivo}</p>}
+                </div>
               ),
             },
             {

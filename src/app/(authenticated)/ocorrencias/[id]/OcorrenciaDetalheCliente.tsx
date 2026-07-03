@@ -13,11 +13,19 @@ import { Modal } from '@/components/ui/Modal'
 import { Select } from '@/components/ui/Select'
 import { FotoUpload } from '@/components/checklists/FotoUpload'
 import { useToast } from '@/components/ui/Toast'
-import { moverStatusOcorrencia, registrarFotoSolucao } from '@/lib/actions/ocorrencias'
+import {
+  moverStatusOcorrencia,
+  registrarFotoSolucao,
+  reenviarEmailManutencao,
+  registrarEntradaOficina,
+  validarLiberarOcorrencia,
+  liberarChecklistEmergencial,
+} from '@/lib/actions/ocorrencias'
 import { obterUrlFotoAsync } from '@/lib/storage'
 import type { FotoUploadResult } from '@/lib/storage'
 import {
   STATUS_OCORRENCIA_LABEL,
+  STATUS_TRATATIVA_LABEL,
   GRAVIDADE_LABEL,
   RESPONSAVEL_OCORRENCIA_LABEL,
   TIPO_VEICULO_LABEL,
@@ -33,7 +41,12 @@ type Foto = { id: string; storage_path: string; nome_original: string; criado_em
 
 type OcorrenciaInfo = {
   id: string; numero: number; descricao: string; gravidade: string
-  responsavel: string; prazo: string | null; status: string
+  responsavel: string; prazo: string | null; status: string; status_tratativa: string
+  bloqueante: boolean; email_status: string; email_erro: string | null; email_enviado_em: string | null
+  data_encaminhado_manutencao: string | null; data_devolutiva_manutencao: string | null
+  data_solicitado_oficina: string | null; data_entrada_oficina: string | null; data_saida_oficina: string | null
+  data_validacao_frota: string | null; dias_em_oficina: number | null; dias_pendencia_total: number | null
+  devolutiva_manutencao: string | null
   criado_em: string; data_resolucao: string | null
   veiculos: { id: string; placa: string; codigo_frota: string | null; tipo: string; fabricante: string | null; modelo: string | null } | null
   checklist_items: { id: string; nome: string; item_critico: boolean; checklist_categorias: { nome: string } | null } | null
@@ -58,13 +71,11 @@ const TRANSICOES: Record<string, { value: string; label: string }[]> = {
   ],
   em_analise: [
     { value: 'aguardando_manutencao', label: 'Aguardando manutenção' },
-    { value: 'resolvida', label: 'Marcar como resolvida' },
     { value: 'reprovada', label: 'Reprovar solução' },
     { value: 'cancelada', label: 'Cancelar' },
   ],
   aguardando_manutencao: [
     { value: 'em_analise', label: 'Voltar para análise' },
-    { value: 'resolvida', label: 'Marcar como resolvida' },
     { value: 'cancelada', label: 'Cancelar' },
   ],
 }
@@ -142,6 +153,67 @@ export function OcorrenciaDetalheCliente({ dados }: Props) {
 
   const StatusIcon = statusIcone[ocorrencia.status] ?? AlertTriangle
 
+  async function handleReenviarEmail() {
+    if (!confirm('Reenviar/gerar encaminhamento para manutenção?')) return
+    setLoadingMover(true)
+    try {
+      const res = await reenviarEmailManutencao(ocorrencia.id)
+      if (res.emailStatus === 'enviado') success('E-mail enviado para manutenção.')
+      else if (res.emailStatus === 'pendente_configuracao') success('Encaminhamento registrado. Configure RESEND_API_KEY, EMAIL_FROM e MANUTENCAO_EMAILS para envio real.')
+      else toastError(res.erro ?? 'Não foi possível enviar o e-mail, mas o encaminhamento foi registrado.')
+      router.refresh()
+    } catch (err) {
+      toastError(err instanceof Error ? err.message : 'Erro ao encaminhar ocorrência.')
+    } finally {
+      setLoadingMover(false)
+    }
+  }
+
+  async function handleEntradaOficina() {
+    const obs = prompt('Observação da entrada em oficina:', 'Veículo encaminhado/recebido na oficina para tratativa.')
+    if (obs === null) return
+    setLoadingMover(true)
+    try {
+      await registrarEntradaOficina(ocorrencia.id, obs)
+      success('Entrada em oficina registrada.')
+      router.refresh()
+    } catch (err) {
+      toastError(err instanceof Error ? err.message : 'Erro ao registrar entrada em oficina.')
+    } finally {
+      setLoadingMover(false)
+    }
+  }
+
+  async function handleValidarLiberar() {
+    const obs = prompt('Observação da validação/liberação:', 'Problema conferido pela Frota e veículo liberado.')
+    if (obs === null) return
+    setLoadingMover(true)
+    try {
+      await validarLiberarOcorrencia(ocorrencia.id, obs)
+      success('Ocorrência validada e veículo liberado.')
+      router.refresh()
+    } catch (err) {
+      toastError(err instanceof Error ? err.message : 'Erro ao validar/liberar ocorrência.')
+    } finally {
+      setLoadingMover(false)
+    }
+  }
+
+  async function handleLiberacaoEmergencial() {
+    const obs = prompt('Motivo da liberação emergencial do checklist:')
+    if (!obs) return
+    setLoadingMover(true)
+    try {
+      await liberarChecklistEmergencial(ocorrencia.id, obs)
+      success('Checklist liberado emergencialmente para este veículo.')
+      router.refresh()
+    } catch (err) {
+      toastError(err instanceof Error ? err.message : 'Erro ao liberar checklist.')
+    } finally {
+      setLoadingMover(false)
+    }
+  }
+
   return (
     <div className="flex-1 p-6 space-y-5">
       <button
@@ -213,6 +285,49 @@ export function OcorrenciaDetalheCliente({ dados }: Props) {
               </div>
             ))}
           </div>
+        </Card>
+
+        <Card className="lg:col-span-3">
+          <CardHeader title="Status operacional e manutenção" description="Controle da tratativa e bloqueio de novos checklists" />
+          <div className="grid grid-cols-1 md:grid-cols-4 gap-3">
+            <div className="rounded-xl bg-blue-50 border border-blue-100 p-3">
+              <p className="text-xs text-blue-500 font-bold uppercase">Tratativa</p>
+              <p className="text-sm font-bold text-blue-950 mt-1">
+                {STATUS_TRATATIVA_LABEL[ocorrencia.status_tratativa as keyof typeof STATUS_TRATATIVA_LABEL] ?? ocorrencia.status_tratativa}
+              </p>
+            </div>
+            <div className="rounded-xl bg-slate-50 border border-slate-100 p-3">
+              <p className="text-xs text-slate-400 font-bold uppercase">E-mail manutenção</p>
+              <p className="text-sm font-bold text-slate-900 mt-1">{ocorrencia.email_status || 'não enviado'}</p>
+              <p className="text-xs text-slate-500">{ocorrencia.email_enviado_em ? formatarDataHora(ocorrencia.email_enviado_em) : 'Sem envio confirmado'}</p>
+            </div>
+            <div className="rounded-xl bg-slate-50 border border-slate-100 p-3">
+              <p className="text-xs text-slate-400 font-bold uppercase">Tempo em oficina</p>
+              <p className="text-sm font-bold text-slate-900 mt-1">{ocorrencia.dias_em_oficina != null ? `${ocorrencia.dias_em_oficina} dia(s)` : '—'}</p>
+              <p className="text-xs text-slate-500">Entrada: {ocorrencia.data_entrada_oficina ? formatarDataHora(ocorrencia.data_entrada_oficina) : '—'}</p>
+            </div>
+            <div className="rounded-xl bg-slate-50 border border-slate-100 p-3">
+              <p className="text-xs text-slate-400 font-bold uppercase">Pendência total</p>
+              <p className="text-sm font-bold text-slate-900 mt-1">{ocorrencia.dias_pendencia_total != null ? `${ocorrencia.dias_pendencia_total} dia(s)` : 'em aberto'}</p>
+              <p className="text-xs text-slate-500">Bloqueante: {ocorrencia.bloqueante ? 'Sim' : 'Não'}</p>
+            </div>
+          </div>
+          {ocorrencia.email_erro && (
+            <p className="mt-3 rounded-lg bg-red-50 border border-red-100 p-3 text-xs text-red-700">Erro de e-mail: {ocorrencia.email_erro}</p>
+          )}
+          {ocorrencia.devolutiva_manutencao && (
+            <p className="mt-3 rounded-lg bg-slate-50 border border-slate-100 p-3 text-sm text-slate-700">
+              <strong>Última devolutiva da manutenção:</strong> {ocorrencia.devolutiva_manutencao}
+            </p>
+          )}
+          {!encerrada && (
+            <div className="flex flex-wrap gap-2 mt-4 pt-4 border-t border-slate-100">
+              <Button variant="outline" onClick={handleReenviarEmail} disabled={loadingMover}>Encaminhar/Reenviar e-mail</Button>
+              <Button variant="outline" onClick={handleEntradaOficina} disabled={loadingMover}>Registrar entrada na oficina</Button>
+              <Button onClick={handleValidarLiberar} disabled={loadingMover}>Validar e liberar veículo</Button>
+              <Button variant="danger" onClick={handleLiberacaoEmergencial} disabled={loadingMover}>Liberação emergencial</Button>
+            </div>
+          )}
         </Card>
 
         {/* Fotos */}

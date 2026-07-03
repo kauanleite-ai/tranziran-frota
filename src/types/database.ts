@@ -15,6 +15,14 @@ export type Json =
 // ---- ENUMS ----
 export type PerfilUsuario = 'admin' | 'frota' | 'motorista' | 'manutencao' | 'gestor' | 'auditor'
 export type StatusVeiculo = 'ativo' | 'inativo' | 'manutencao' | 'vendido'
+export type StatusOperacionalVeiculo =
+  | 'liberado'
+  | 'nao_conformidade_aberta'
+  | 'encaminhado_manutencao'
+  | 'aguardando_devolutiva_manutencao'
+  | 'aguardando_envio_oficina'
+  | 'em_oficina'
+  | 'resolvido_aguardando_validacao'
 export type TipoVeiculo = 'cavalo' | 'carreta' | 'bau' | 'truck' | 'carro_passeio' | 'guindaste' | 'outro'
 export type StatusMotorista = 'ativo' | 'inativo' | 'ferias' | 'afastado'
 export type TipoRespostaItem = 'status_padrao' | 'texto' | 'numero' | 'booleano' | 'data'
@@ -25,6 +33,16 @@ export type StatusAuditoria = 'pendente' | 'em_andamento' | 'concluida' | 'cance
 export type StatusAgendamento = 'pendente' | 'realizada' | 'vencida' | 'cancelada'
 export type GravidadeOcorrencia = 'baixa' | 'media' | 'alta' | 'critica'
 export type StatusOcorrencia = 'aberta' | 'em_analise' | 'aguardando_manutencao' | 'resolvida' | 'reprovada' | 'cancelada'
+export type StatusTratativaOcorrencia =
+  | 'nao_conformidade_aberta'
+  | 'encaminhado_manutencao'
+  | 'aguardando_devolutiva_manutencao'
+  | 'em_analise_manutencao'
+  | 'aguardando_envio_oficina'
+  | 'em_oficina'
+  | 'resolvido_aguardando_validacao'
+  | 'validada_liberada'
+  | 'cancelada'
 export type ResponsavelOcorrencia = 'frota' | 'manutencao' | 'motorista' | 'terceiro'
 export type OrigemEstado = 'checklist_base' | 'auditoria' | 'ocorrencia_resolvida'
 
@@ -104,6 +122,12 @@ export interface Veiculo {
   checklist_base_concluido: boolean
   data_checklist_base: string | null
   data_proxima_auditoria: string | null
+  status_operacional: StatusOperacionalVeiculo
+  bloqueado_checklist: boolean
+  ocorrencia_bloqueante_id: string | null
+  bloqueio_motivo: string | null
+  data_bloqueio: string | null
+  data_liberacao_operacional: string | null
   criado_em: string
   atualizado_em: string
 }
@@ -322,6 +346,22 @@ export interface Ocorrencia {
   responsavel: ResponsavelOcorrencia
   prazo: string | null
   status: StatusOcorrencia
+  bloqueante: boolean
+  status_tratativa: StatusTratativaOcorrencia
+  email_enviado_em: string | null
+  email_destinatarios: string[] | null
+  email_status: string
+  email_erro: string | null
+  protocolo_email: string | null
+  data_encaminhado_manutencao: string | null
+  data_devolutiva_manutencao: string | null
+  data_solicitado_oficina: string | null
+  data_entrada_oficina: string | null
+  data_saida_oficina: string | null
+  data_validacao_frota: string | null
+  dias_em_oficina: number | null
+  dias_pendencia_total: number | null
+  devolutiva_manutencao: string | null
   aberta_por: string
   resolvida_por: string | null
   data_resolucao: string | null
@@ -336,6 +376,30 @@ export interface OcorrenciaHistorico {
   status_novo: StatusOcorrencia
   observacao: string | null
   feito_por: string
+  criado_em: string
+}
+
+
+export interface OcorrenciaAcessoManutencao {
+  id: string
+  ocorrencia_id: string
+  token: string
+  ativo: boolean
+  expira_em: string | null
+  usado_em: string | null
+  criado_em: string
+}
+
+export interface OcorrenciaEmailLog {
+  id: string
+  ocorrencia_id: string
+  destinatarios: string[]
+  assunto: string
+  corpo_html: string | null
+  status: string
+  provider: string | null
+  provider_id: string | null
+  erro: string | null
   criado_em: string
 }
 
@@ -414,6 +478,8 @@ export interface Database {
       auditoria_respostas: Table<AuditoriaResposta>
       ocorrencias: Table<Ocorrencia>
       ocorrencia_historico: Table<OcorrenciaHistorico>
+      ocorrencia_acessos_manutencao: Table<OcorrenciaAcessoManutencao>
+      ocorrencia_email_logs: Table<OcorrenciaEmailLog>
       integracoes_telemetria: Table<IntegracaoTelemetria>
       telemetria_veiculos: Table<TelemetriaVeiculo>
       telemetria_odometro: Table<TelemetriaOdometro>

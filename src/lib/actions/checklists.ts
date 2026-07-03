@@ -3,6 +3,7 @@
 import { createClient } from '@/lib/supabase/server'
 import { revalidatePath } from 'next/cache'
 import { INTERVALO_AUDITORIA_DIAS } from '@/lib/constants'
+import { encaminharOcorrenciaParaManutencao } from '@/lib/email/ocorrencias'
 
 // ============================================================
 // TIPOS
@@ -36,11 +37,17 @@ export async function dadosParaIniciarChecklist(veiculoId: string) {
 
   const { data: veiculo, error: errVeiculo } = await supabase
     .from('veiculos')
-    .select('id, placa, tipo, km_atual, checklist_base_concluido, empresa_id')
+    .select('id, placa, tipo, km_atual, checklist_base_concluido, empresa_id, bloqueado_checklist, status_operacional, bloqueio_motivo, ocorrencia_bloqueante_id')
     .eq('id', veiculoId)
     .single()
 
   if (errVeiculo) throw new Error(errVeiculo.message)
+
+  if (veiculo.bloqueado_checklist && veiculo.ocorrencia_bloqueante_id) {
+    throw new Error(
+      `Checklist bloqueado para este veículo. Existe uma ocorrência bloqueante em tratativa. ${veiculo.bloqueio_motivo ?? ''}`
+    )
+  }
 
   // Busca o template ativo com versão publicada mais recente
   const { data: templates, error: errTemplates } = await supabase
@@ -276,6 +283,8 @@ export async function finalizarChecklist(input: FinalizarChecklistInput) {
             gravidade: itemInfo?.item_critico ? 'alta' : 'media',
             responsavel: 'frota' as never,
             status: 'aberta' as never,
+            status_tratativa: 'nao_conformidade_aberta',
+            bloqueante: true,
             aberta_por: user.id,
           })
           .select()
@@ -295,6 +304,8 @@ export async function finalizarChecklist(input: FinalizarChecklistInput) {
           .from('checklist_fotos')
           .update({ ocorrencia_id: ocorrencia.id })
           .eq('resposta_id', respostaSalva.id)
+
+        await encaminharOcorrenciaParaManutencao(ocorrencia.id)
       }
     }
 

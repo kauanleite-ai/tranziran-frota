@@ -2,6 +2,8 @@
 
 import { createClient } from '@/lib/supabase/server'
 import { revalidatePath } from 'next/cache'
+import { INTERVALO_AUDITORIA_DIAS } from '@/lib/constants'
+import { encaminharOcorrenciaParaManutencao } from '@/lib/email/ocorrencias'
 
 // ============================================================
 // TIPOS
@@ -26,7 +28,8 @@ export async function listarOcorrencias(filtros?: FiltrosOcorrencia) {
   let query = supabase
     .from('ocorrencias')
     .select(`
-      id, numero, descricao, gravidade, responsavel, prazo, status,
+      id, numero, descricao, gravidade, responsavel, prazo, status, status_tratativa, bloqueante,
+      email_status, email_enviado_em, data_entrada_oficina, data_saida_oficina,
       criado_em, data_resolucao, checklist_id, auditoria_id, item_id,
       veiculos(id, placa, codigo_frota, tipo),
       checklist_items(id, nome),
@@ -91,8 +94,11 @@ export async function buscarOcorrencia(id: string) {
   const { data: ocorrencia, error } = await supabase
     .from('ocorrencias')
     .select(`
-      id, numero, descricao, gravidade, responsavel, prazo, status,
-      criado_em, data_resolucao, checklist_id, auditoria_id, item_id,
+      id, numero, descricao, gravidade, responsavel, prazo, status, status_tratativa, bloqueante,
+      email_status, email_erro, email_enviado_em, email_destinatarios, protocolo_email,
+      data_encaminhado_manutencao, data_devolutiva_manutencao, data_solicitado_oficina,
+      data_entrada_oficina, data_saida_oficina, data_validacao_frota, dias_em_oficina,
+      dias_pendencia_total, devolutiva_manutencao, criado_em, data_resolucao, checklist_id, auditoria_id, item_id,
       veiculos(id, placa, codigo_frota, tipo, fabricante, modelo),
       checklist_items(
         id, nome, item_critico,
@@ -225,13 +231,19 @@ export async function criarOcorrencia(dados: {
       responsavel: dados.responsavel as never,
       prazo: dados.prazo || null,
       status: 'aberta' as never,
+      status_tratativa: 'nao_conformidade_aberta',
+      bloqueante: true,
       aberta_por: user.id,
     })
     .select()
     .single()
 
   if (error) throw new Error(error.message)
+
+  await encaminharOcorrenciaParaManutencao(data.id)
+
   revalidatePath('/ocorrencias')
+  revalidatePath('/veiculos')
   return data
 }
 
@@ -365,4 +377,211 @@ export async function registrarFotoSolucao(
 
   if (error) throw new Error(error.message)
   revalidatePath(`/ocorrencias/${ocorrenciaId}`)
+}
+
+// ============================================================
+// FLUXO NOVO — STATUS OPERACIONAL / MANUTENÇÃO
+// ============================================================
+
+function calcularDiasEntre(inicio?: string | null, fim?: string | null) {
+  if (!inicio || !fim) return null
+  const ms = new Date(fim).getTime() - new Date(inicio).getTime()
+  if (Number.isNaN(ms) || ms < 0) return null
+  return Math.round((ms / 1000 / 60 / 60 / 24) * 100) / 100
+}
+
+export async function reenviarEmailManutencao(ocorrenciaId: string) {
+  const resultado = await encaminharOcorrenciaParaManutencao(ocorrenciaId)
+  revalidatePath(`/ocorrencias/${ocorrenciaId}`)
+  revalidatePath('/ocorrencias')
+  revalidatePath('/veiculos')
+  return resultado
+}
+
+export async function registrarEntradaOficina(ocorrenciaId: string, observacao?: string) {
+  const supabase = await createClient()
+  const { data: { user } } = await supabase.auth.getUser()
+  if (!user) throw new Error('Não autenticado.')
+
+  const agora = new Date().toISOString()
+
+  const { data: ocorrencia, error } = await supabase
+    .from('ocorrencias')
+    .select('id, status, veiculo_id')
+    .eq('id', ocorrenciaId)
+    .single()
+
+  if (error || !ocorrencia) throw new Error(error?.message ?? 'Ocorrência não encontrada.')
+
+  const { error: errUpdate } = await supabase
+    .from('ocorrencias')
+    .update({
+      status: 'em_analise' as never,
+      status_tratativa: 'em_oficina',
+      data_entrada_oficina: agora,
+    })
+    .eq('id', ocorrenciaId)
+
+  if (errUpdate) throw new Error(errUpdate.message)
+
+  await supabase.from('ocorrencia_historico').insert({
+    ocorrencia_id: ocorrenciaId,
+    status_anterior: ocorrencia.status as never,
+    status_novo: 'em_analise' as never,
+    observacao: observacao?.trim() || 'Veículo registrado como entrada em oficina.',
+    feito_por: user.id,
+  })
+
+  await supabase
+    .from('veiculos')
+    .update({ status_operacional: 'em_oficina', bloqueado_checklist: true })
+    .eq('id', ocorrencia.veiculo_id)
+
+  revalidatePath(`/ocorrencias/${ocorrenciaId}`)
+  revalidatePath('/ocorrencias')
+  revalidatePath('/veiculos')
+}
+
+export async function validarLiberarOcorrencia(ocorrenciaId: string, observacao?: string) {
+  const supabase = await createClient()
+  const { data: { user } } = await supabase.auth.getUser()
+  if (!user) throw new Error('Não autenticado.')
+
+  const agora = new Date().toISOString()
+
+  const { data: ocorrencia, error } = await supabase
+    .from('ocorrencias')
+    .select('id, status, veiculo_id, item_id, criado_em, data_entrada_oficina, data_saida_oficina')
+    .eq('id', ocorrenciaId)
+    .single()
+
+  if (error || !ocorrencia) throw new Error(error?.message ?? 'Ocorrência não encontrada.')
+
+  const diasOficina = calcularDiasEntre(ocorrencia.data_entrada_oficina, ocorrencia.data_saida_oficina ?? agora)
+  const diasTotal = calcularDiasEntre(ocorrencia.criado_em, agora)
+
+  const { error: errUpdate } = await supabase
+    .from('ocorrencias')
+    .update({
+      status: 'resolvida' as never,
+      status_tratativa: 'validada_liberada',
+      resolvida_por: user.id,
+      data_resolucao: agora,
+      data_validacao_frota: agora,
+      dias_em_oficina: diasOficina,
+      dias_pendencia_total: diasTotal,
+    })
+    .eq('id', ocorrenciaId)
+
+  if (errUpdate) throw new Error(errUpdate.message)
+
+  await supabase.from('ocorrencia_historico').insert({
+    ocorrencia_id: ocorrenciaId,
+    status_anterior: ocorrencia.status as never,
+    status_novo: 'resolvida' as never,
+    observacao: observacao?.trim() || 'Ocorrência validada pela Frota e veículo liberado.',
+    feito_por: user.id,
+  })
+
+  await supabase
+    .from('veiculo_estado_atual')
+    .update({
+      resposta: 'ok' as never,
+      observacao: observacao?.trim() || 'Item validado e liberado pela Frota.',
+      data_atualizacao: agora,
+      quem_atualizou: user.id,
+    })
+    .eq('veiculo_id', ocorrencia.veiculo_id)
+    .eq('item_id', ocorrencia.item_id)
+
+  await supabase.from('veiculo_estado_historico').insert({
+    veiculo_id: ocorrencia.veiculo_id,
+    item_id: ocorrencia.item_id,
+    resposta_anterior: 'nao_ok' as never,
+    resposta_nova: 'ok' as never,
+    observacao_anterior: null,
+    observacao_nova: observacao?.trim() || 'Validação final da Frota.',
+    origem: 'ocorrencia_resolvida' as never,
+    ocorrencia_id: ocorrenciaId,
+    quem_alterou: user.id,
+  })
+
+  const { data: pendentes } = await supabase
+    .from('ocorrencias')
+    .select('id')
+    .eq('veiculo_id', ocorrencia.veiculo_id)
+    .eq('bloqueante', true)
+    .not('id', 'eq', ocorrenciaId)
+    .not('status', 'in', '(resolvida,cancelada)')
+    .limit(1)
+
+  if (!pendentes || pendentes.length === 0) {
+    const proxima = new Date()
+    proxima.setDate(proxima.getDate() + INTERVALO_AUDITORIA_DIAS)
+    const dataProxima = proxima.toISOString().split('T')[0]
+
+    await supabase
+      .from('veiculos')
+      .update({
+        status_operacional: 'liberado',
+        bloqueado_checklist: false,
+        ocorrencia_bloqueante_id: null,
+        bloqueio_motivo: null,
+        data_liberacao_operacional: agora,
+        data_proxima_auditoria: dataProxima,
+      })
+      .eq('id', ocorrencia.veiculo_id)
+
+    await supabase.from('auditoria_agendamentos').insert({
+      veiculo_id: ocorrencia.veiculo_id,
+      data_agendada: dataProxima,
+      status: 'pendente' as never,
+    })
+  }
+
+  revalidatePath(`/ocorrencias/${ocorrenciaId}`)
+  revalidatePath('/ocorrencias')
+  revalidatePath('/veiculos')
+  revalidatePath('/auditorias')
+  revalidatePath('/dashboard')
+}
+
+// Uso administrativo emergencial: liberar checklist sem resolver a ocorrência.
+// Mantém o histórico da ocorrência, mas remove o bloqueio operacional do veículo.
+export async function liberarChecklistEmergencial(ocorrenciaId: string, observacao: string) {
+  const supabase = await createClient()
+  const { data: { user } } = await supabase.auth.getUser()
+  if (!user) throw new Error('Não autenticado.')
+  if (!observacao.trim()) throw new Error('Informe o motivo da liberação emergencial.')
+
+  const { data: ocorrencia, error } = await supabase
+    .from('ocorrencias')
+    .select('id, status, veiculo_id')
+    .eq('id', ocorrenciaId)
+    .single()
+
+  if (error || !ocorrencia) throw new Error(error?.message ?? 'Ocorrência não encontrada.')
+
+  await supabase
+    .from('veiculos')
+    .update({
+      status_operacional: 'liberado',
+      bloqueado_checklist: false,
+      ocorrencia_bloqueante_id: null,
+      bloqueio_motivo: null,
+      data_liberacao_operacional: new Date().toISOString(),
+    })
+    .eq('id', ocorrencia.veiculo_id)
+
+  await supabase.from('ocorrencia_historico').insert({
+    ocorrencia_id: ocorrenciaId,
+    status_anterior: ocorrencia.status as never,
+    status_novo: ocorrencia.status as never,
+    observacao: `[Liberação emergencial de checklist] ${observacao.trim()}`,
+    feito_por: user.id,
+  })
+
+  revalidatePath(`/ocorrencias/${ocorrenciaId}`)
+  revalidatePath('/ocorrencias')
+  revalidatePath('/veiculos')
 }

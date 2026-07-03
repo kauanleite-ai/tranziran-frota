@@ -15,6 +15,9 @@ type Veiculo = {
   tipo: string
   km_atual: number | null
   checklist_base_concluido: boolean
+  bloqueado_checklist?: boolean
+  status_operacional?: string
+  bloqueio_motivo?: string | null
 }
 
 type Motorista = { id: string; nome: string; matricula: string }
@@ -74,6 +77,9 @@ export function MobileChecklistClient({ veiculos, motoristas, veiculoPreSelecion
     if (veiculo) {
       setKm(veiculo.km_atual ? String(veiculo.km_atual) : '')
       setTipo(veiculo.checklist_base_concluido ? 'saida' : 'base')
+      if (veiculo.bloqueado_checklist) {
+        toastError(veiculo.bloqueio_motivo || 'Este veículo está bloqueado por ocorrência aberta.')
+      }
     }
   }
 
@@ -155,7 +161,9 @@ export function MobileChecklistClient({ veiculos, motoristas, veiculoPreSelecion
                       {veiculo.codigo_frota ? ` · Frota ${veiculo.codigo_frota}` : ''}
                     </p>
                   </div>
-                  {!veiculo.checklist_base_concluido && (
+                  {veiculo.bloqueado_checklist ? (
+                    <span className="rounded-full bg-red-100 px-2 py-1 text-[10px] font-bold text-red-700">Bloqueado</span>
+                  ) : !veiculo.checklist_base_concluido && (
                     <span className="rounded-full bg-orange-100 px-2 py-1 text-[10px] font-bold text-orange-700">Sem base</span>
                   )}
                 </button>

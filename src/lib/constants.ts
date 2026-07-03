@@ -24,6 +24,17 @@ export const STATUS_VEICULO_LABEL = {
   vendido: 'Vendido',
 } as const
 
+// Status operacional do veículo — controla bloqueio/liberação para novos checklists
+export const STATUS_OPERACIONAL_LABEL = {
+  liberado: 'Liberado',
+  nao_conformidade_aberta: 'Não conformidade aberta',
+  encaminhado_manutencao: 'Encaminhado à manutenção',
+  aguardando_devolutiva_manutencao: 'Aguardando devolutiva da manutenção',
+  aguardando_envio_oficina: 'Aguardando envio para oficina',
+  em_oficina: 'Em oficina',
+  resolvido_aguardando_validacao: 'Resolvido — aguardando validação',
+} as const
+
 // Tipos de veículo
 export const TIPO_VEICULO_LABEL = {
   cavalo: 'Cavalo Mecânico',
@@ -55,9 +66,22 @@ export const STATUS_AUDITORIA_LABEL = {
 export const STATUS_OCORRENCIA_LABEL = {
   aberta: 'Aberta',
   em_analise: 'Em Análise',
-  aguardando_manutencao: 'Aguardando Manutenção',
+  aguardando_manutencao: 'Encaminhada à Manutenção',
   resolvida: 'Resolvida',
   reprovada: 'Reprovada',
+  cancelada: 'Cancelada',
+} as const
+
+// Status detalhado da tratativa da ocorrência
+export const STATUS_TRATATIVA_LABEL = {
+  nao_conformidade_aberta: 'Não conformidade aberta',
+  encaminhado_manutencao: 'Encaminhado à manutenção',
+  aguardando_devolutiva_manutencao: 'Aguardando devolutiva da manutenção',
+  em_analise_manutencao: 'Em análise pela manutenção',
+  aguardando_envio_oficina: 'Aguardando envio para oficina',
+  em_oficina: 'Em oficina',
+  resolvido_aguardando_validacao: 'Resolvido — aguardando validação da Frota',
+  validada_liberada: 'Validada e liberada',
   cancelada: 'Cancelada',
 } as const
 

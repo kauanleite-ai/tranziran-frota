@@ -3,6 +3,7 @@
 import { createClient } from '@/lib/supabase/server'
 import { revalidatePath } from 'next/cache'
 import { INTERVALO_AUDITORIA_DIAS } from '@/lib/constants'
+import { encaminharOcorrenciaParaManutencao } from '@/lib/email/ocorrencias'
 
 // ============================================================
 // TIPOS
@@ -107,7 +108,7 @@ export async function dadosParaIniciarAuditoria(agendamentoId: string) {
   const { data: veiculo, error: errVeiculo } = await supabase
     .from('veiculos')
     .select(`
-      id, placa, tipo, km_atual, fabricante, modelo,
+      id, placa, tipo, km_atual, fabricante, modelo, bloqueado_checklist, bloqueio_motivo, ocorrencia_bloqueante_id,
       empresas(nome), unidades(nome),
       veiculo_motorista_vinculos(
         motorista_id, ativo,
@@ -118,6 +119,10 @@ export async function dadosParaIniciarAuditoria(agendamentoId: string) {
     .single()
 
   if (errVeiculo) throw new Error(errVeiculo.message)
+
+  if (veiculo.bloqueado_checklist && veiculo.ocorrencia_bloqueante_id) {
+    throw new Error(`Auditoria comum bloqueada. Existe ocorrência em tratativa para este veículo. ${veiculo.bloqueio_motivo ?? ''}`)
+  }
 
   // 3. Busca o template ativo publicado
   const { data: templates } = await supabase
@@ -378,7 +383,9 @@ export async function finalizarAuditoria(input: FinalizarAuditoriaInput) {
               descricao: resp.observacao || 'Item identificado como não conforme na auditoria.',
               gravidade: itemInfo?.item_critico ? 'alta' : 'media',
               responsavel: 'frota' as never,
-              status: 'aberta' as never,
+                status: 'aberta' as never,
+              status_tratativa: 'nao_conformidade_aberta',
+              bloqueante: true,
               aberta_por: user.id,
             })
             .select()
@@ -395,6 +402,8 @@ export async function finalizarAuditoria(input: FinalizarAuditoriaInput) {
             .from('checklist_fotos')
             .update({ ocorrencia_id: ocorrencia.id })
             .eq('resposta_id', respostaSalva.id)
+
+          await encaminharOcorrenciaParaManutencao(ocorrencia.id)
         }
       } else if (resp.continua_igual) {
         // Mesmo sem mudança, atualiza a data_atualizacao para rastrear que foi conferido

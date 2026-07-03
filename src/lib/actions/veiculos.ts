@@ -29,6 +29,7 @@ export async function listarVeiculos(filtros?: {
     .select(`
       id, placa, codigo_frota, tipo, fabricante, modelo, ano,
       status, km_atual, checklist_base_concluido, data_proxima_auditoria,
+      status_operacional, bloqueado_checklist, ocorrencia_bloqueante_id, bloqueio_motivo,
       criado_em,
       empresas(id, nome),
       unidades(id, nome)
