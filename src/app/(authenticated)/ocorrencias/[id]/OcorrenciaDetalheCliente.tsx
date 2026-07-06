@@ -154,25 +154,33 @@ export function OcorrenciaDetalheCliente({ dados }: Props) {
   const StatusIcon = statusIcone[ocorrencia.status] ?? AlertTriangle
 
   async function handleReenviarEmail() {
-    if (!confirm('Reenviar/gerar encaminhamento para manutenção?')) return
-    setLoadingMover(true)
-    try {
-     try {
-  const res = await reenviarEmailManutencao(ocorrencia.id)
+  if (!confirm('Reenviar/gerar encaminhamento para manutenção?')) return
 
-  if (res.ok) {
-    success('E-mail enviado para manutenção.')
-  } else {
-    toastError(res.erro ?? 'Não foi possível enviar o e-mail.')
+  setLoadingMover(true)
+
+  try {
+    const res = await reenviarEmailManutencao(ocorrencia.id) as {
+      ok: boolean
+      erro?: string
+      messageId?: string
+    }
+
+    if (res.ok) {
+      success('E-mail enviado para manutenção.')
+    } else {
+      toastError(res.erro ?? 'Não foi possível enviar o e-mail.')
+    }
+
+    router.refresh()
+  } catch (err) {
+    toastError(
+      err instanceof Error
+        ? err.message
+        : 'Não foi possível enviar o e-mail.'
+    )
+  } finally {
+    setLoadingMover(false)
   }
-
-  router.refresh()
-} catch (error) {
-  toastError(
-    error instanceof Error
-      ? error.message
-      : 'Não foi possível enviar o e-mail.'
-  )
 }
 
   async function handleEntradaOficina() {
