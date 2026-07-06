@@ -32,8 +32,7 @@ export async function listarOcorrencias(filtros?: FiltrosOcorrencia) {
       email_status, email_enviado_em, data_entrada_oficina, data_saida_oficina,
       criado_em, data_resolucao, checklist_id, auditoria_id, item_id,
       veiculos(id, placa, codigo_frota, tipo),
-      checklist_items(id, nome),
-      checklist_fotos(id, storage_path)
+      checklist_items(id, nome)
     `)
     .order('criado_em', { ascending: false })
     .limit(200)
@@ -56,31 +55,28 @@ export async function listarOcorrencias(filtros?: FiltrosOcorrencia) {
 export async function contadoresOcorrencias() {
   const supabase = await createClient()
 
-  const [abertas, criticas, emAnalise, aguardando] = await Promise.all([
-    supabase
-      .from('ocorrencias')
-      .select('*', { count: 'exact', head: true })
-      .eq('status', 'aberta'),
-    supabase
-      .from('ocorrencias')
-      .select('*', { count: 'exact', head: true })
-      .eq('gravidade', 'critica')
-      .in('status', ['aberta', 'em_analise', 'aguardando_manutencao']),
-    supabase
-      .from('ocorrencias')
-      .select('*', { count: 'exact', head: true })
-      .eq('status', 'em_analise'),
-    supabase
-      .from('ocorrencias')
-      .select('*', { count: 'exact', head: true })
-      .eq('status', 'aguardando_manutencao'),
-  ])
+  const statusEncerrados = ['resolvida', 'reprovada', 'cancelada']
+
+  const { data, error } = await supabase
+    .from('ocorrencias')
+    .select('status, gravidade, status_tratativa')
+    .limit(1000)
+
+  if (error) throw new Error(error.message)
+
+  const ocorrencias = data ?? []
+  const emAberto = ocorrencias.filter((o) => !statusEncerrados.includes(o.status))
 
   return {
-    abertas: abertas.count ?? 0,
-    criticas: criticas.count ?? 0,
-    emAnalise: emAnalise.count ?? 0,
-    aguardando: aguardando.count ?? 0,
+    abertas: emAberto.length,
+    criticas: emAberto.filter((o) => o.gravidade === 'critica').length,
+    emAnalise: emAberto.filter((o) =>
+      o.status === 'em_analise' || o.status_tratativa === 'em_analise_manutencao'
+    ).length,
+    aguardando: emAberto.filter((o) =>
+      o.status === 'aguardando_manutencao' ||
+      ['encaminhado_manutencao', 'aguardando_devolutiva_manutencao'].includes(o.status_tratativa ?? '')
+    ).length,
   }
 }
 

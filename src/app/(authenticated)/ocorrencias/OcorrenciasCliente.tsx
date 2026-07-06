@@ -14,6 +14,7 @@ import { SearchInput } from '@/components/ui/SearchInput'
 import { Select } from '@/components/ui/Select'
 import {
   STATUS_OCORRENCIA_LABEL,
+  STATUS_TRATATIVA_LABEL,
   GRAVIDADE_LABEL,
   RESPONSAVEL_OCORRENCIA_LABEL,
   TIPO_VEICULO_LABEL,
@@ -26,7 +27,15 @@ type Ocorrencia = {
   criado_em: string; data_resolucao: string | null
   veiculos: { id: string; placa: string; codigo_frota: string | null; tipo: string } | null
   checklist_items: { id: string; nome: string } | null
+  status_tratativa?: string | null
+  email_status?: string | null
+  email_enviado_em?: string | null
+  bloqueante?: boolean | null
 }
+
+const STATUS_ENCERRADOS = ['resolvida', 'reprovada', 'cancelada']
+const isEncerrada = (status: string) => STATUS_ENCERRADOS.includes(status)
+
 
 interface Props {
   ocorrenciasIniciais: Ocorrencia[]
@@ -44,6 +53,30 @@ const statusBadge: Record<string, 'red' | 'orange' | 'yellow' | 'blue' | 'green'
   resolvida: 'green',
   reprovada: 'gray',
   cancelada: 'gray',
+}
+
+const tratativaBadge: Record<string, 'red' | 'orange' | 'yellow' | 'blue' | 'green' | 'gray'> = {
+  nao_conformidade_aberta: 'red',
+  encaminhado_manutencao: 'blue',
+  aguardando_devolutiva_manutencao: 'yellow',
+  em_analise_manutencao: 'orange',
+  aguardando_envio_oficina: 'yellow',
+  em_oficina: 'blue',
+  resolvido_aguardando_validacao: 'orange',
+  validada_liberada: 'green',
+  cancelada: 'gray',
+}
+
+function statusLegivel(o: Ocorrencia) {
+  if (o.status_tratativa) {
+    return STATUS_TRATATIVA_LABEL[o.status_tratativa as keyof typeof STATUS_TRATATIVA_LABEL] ?? o.status_tratativa
+  }
+  return STATUS_OCORRENCIA_LABEL[o.status as keyof typeof STATUS_OCORRENCIA_LABEL] ?? o.status
+}
+
+function statusVariant(o: Ocorrencia) {
+  if (o.status_tratativa && tratativaBadge[o.status_tratativa]) return tratativaBadge[o.status_tratativa]
+  return statusBadge[o.status] ?? 'gray'
 }
 
 const statusOptions = [
@@ -83,12 +116,8 @@ export function OcorrenciasCliente({ ocorrenciasIniciais, contadores }: Props) {
     })
   }, [ocorrenciasIniciais, busca, filtroStatus, filtroGravidade, filtroResponsavel])
 
-  const abertas = filtradas.filter((o) =>
-    ['aberta', 'em_analise', 'aguardando_manutencao'].includes(o.status)
-  )
-  const resolvidas = filtradas.filter((o) =>
-    ['resolvida', 'reprovada', 'cancelada'].includes(o.status)
-  )
+  const abertas = filtradas.filter((o) => !isEncerrada(o.status))
+  const resolvidas = filtradas.filter((o) => isEncerrada(o.status))
 
   return (
     <div className="flex-1 p-6 space-y-5">
@@ -158,7 +187,7 @@ export function OcorrenciasCliente({ ocorrenciasIniciais, contadores }: Props) {
       </div>
 
       {/* Ocorrências em aberto */}
-      {(filtroStatus === '' || ['aberta', 'em_analise', 'aguardando_manutencao'].includes(filtroStatus)) && (
+      {(filtroStatus === '' || !isEncerrada(filtroStatus)) && (
         <div>
           <h2 className="text-sm font-semibold text-slate-700 mb-3">
             Em andamento ({abertas.length})
@@ -222,8 +251,8 @@ export function OcorrenciasCliente({ ocorrenciasIniciais, contadores }: Props) {
                   key: 'status',
                   label: 'Status',
                   render: (o) => (
-                    <Badge variant={statusBadge[o.status] ?? 'gray'}>
-                      {STATUS_OCORRENCIA_LABEL[o.status as keyof typeof STATUS_OCORRENCIA_LABEL] ?? o.status}
+                    <Badge variant={statusVariant(o)}>
+                      {statusLegivel(o)}
                     </Badge>
                   ),
                 },
@@ -263,7 +292,7 @@ export function OcorrenciasCliente({ ocorrenciasIniciais, contadores }: Props) {
       )}
 
       {/* Histórico resolvidas */}
-      {(filtroStatus === '' || ['resolvida', 'reprovada', 'cancelada'].includes(filtroStatus)) && resolvidas.length > 0 && (
+      {(filtroStatus === '' || isEncerrada(filtroStatus)) && resolvidas.length > 0 && (
         <div>
           <h2 className="text-sm font-semibold text-slate-700 mb-3">
             Encerradas ({resolvidas.length})
@@ -313,8 +342,8 @@ export function OcorrenciasCliente({ ocorrenciasIniciais, contadores }: Props) {
                   key: 'status',
                   label: 'Status',
                   render: (o) => (
-                    <Badge variant={statusBadge[o.status] ?? 'gray'}>
-                      {STATUS_OCORRENCIA_LABEL[o.status as keyof typeof STATUS_OCORRENCIA_LABEL] ?? o.status}
+                    <Badge variant={statusVariant(o)}>
+                      {statusLegivel(o)}
                     </Badge>
                   ),
                 },
