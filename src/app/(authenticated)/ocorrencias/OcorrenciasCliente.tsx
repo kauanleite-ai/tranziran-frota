@@ -3,8 +3,12 @@
 import { useState, useMemo } from 'react'
 import { useRouter } from 'next/navigation'
 import {
-  AlertTriangle, Eye, Clock, CheckCircle2,
-  XCircle, Filter
+  AlertTriangle,
+  Eye,
+  Clock,
+  CheckCircle2,
+  XCircle,
+  Filter,
 } from 'lucide-react'
 import { Badge } from '@/components/ui/Badge'
 import { Card } from '@/components/ui/Card'
@@ -22,28 +26,76 @@ import {
 import { formatarData, diasAteVencer } from '@/utils'
 
 type Ocorrencia = {
-  id: string; numero: number; descricao: string
-  gravidade: string; responsavel: string; prazo: string | null; status: string
-  criado_em: string; data_resolucao: string | null
-  veiculos: { id: string; placa: string; codigo_frota: string | null; tipo: string } | null
-  checklist_items: { id: string; nome: string } | null
+  id: string
+  numero: number
+  descricao: string
+  gravidade: string
+  responsavel: string
+  prazo: string | null
+  status: string
+  criado_em: string
+  data_resolucao: string | null
+  veiculos: {
+    id: string
+    placa: string
+    codigo_frota: string | null
+    tipo: string
+  } | null
+  checklist_items: {
+    id: string
+    nome: string
+  } | null
   status_tratativa?: string | null
   email_status?: string | null
   email_enviado_em?: string | null
   bloqueante?: boolean | null
 }
 
-const STATUS_ENCERRADOS = ['resolvida', 'reprovada', 'cancelada']
-const isEncerrada = (status: string) => STATUS_ENCERRADOS.includes(status)
-
-
 interface Props {
   ocorrenciasIniciais: Ocorrencia[]
-  contadores: { abertas: number; criticas: number; emAnalise: number; aguardando: number }
+  contadores: {
+    abertas: number
+    criticas: number
+    emAnalise: number
+    aguardando: number
+  }
+}
+
+const STATUS_OCORRENCIA_ENCERRADOS = [
+  'resolvida',
+  'reprovada',
+  'cancelada',
+]
+
+const STATUS_TRATATIVA_ENCERRADOS = [
+  'validada_liberada',
+  'liberado_apos_validacao',
+  'liberada_apos_validacao',
+  'cancelada',
+]
+
+function getStatusPrincipal(o: Ocorrencia) {
+  return o.status_tratativa || o.status
+}
+
+function isEncerrada(o: Ocorrencia) {
+  const statusPrincipal = getStatusPrincipal(o)
+
+  return (
+    STATUS_OCORRENCIA_ENCERRADOS.includes(o.status) ||
+    STATUS_TRATATIVA_ENCERRADOS.includes(statusPrincipal)
+  )
+}
+
+function isAtiva(o: Ocorrencia) {
+  return !isEncerrada(o)
 }
 
 const gravidadeBadge: Record<string, 'red' | 'orange' | 'yellow' | 'gray'> = {
-  critica: 'red', alta: 'orange', media: 'yellow', baixa: 'gray',
+  critica: 'red',
+  alta: 'orange',
+  media: 'yellow',
+  baixa: 'gray',
 }
 
 const statusBadge: Record<string, 'red' | 'orange' | 'yellow' | 'blue' | 'green' | 'gray'> = {
@@ -64,92 +116,172 @@ const tratativaBadge: Record<string, 'red' | 'orange' | 'yellow' | 'blue' | 'gre
   em_oficina: 'blue',
   resolvido_aguardando_validacao: 'orange',
   validada_liberada: 'green',
+  liberado_apos_validacao: 'green',
+  liberada_apos_validacao: 'green',
   cancelada: 'gray',
 }
 
 function statusLegivel(o: Ocorrencia) {
+  const statusPrincipal = getStatusPrincipal(o)
+
   if (o.status_tratativa) {
-    return STATUS_TRATATIVA_LABEL[o.status_tratativa as keyof typeof STATUS_TRATATIVA_LABEL] ?? o.status_tratativa
+    return (
+      STATUS_TRATATIVA_LABEL[
+        o.status_tratativa as keyof typeof STATUS_TRATATIVA_LABEL
+      ] ?? statusPrincipal
+    )
   }
-  return STATUS_OCORRENCIA_LABEL[o.status as keyof typeof STATUS_OCORRENCIA_LABEL] ?? o.status
+
+  return (
+    STATUS_OCORRENCIA_LABEL[
+      o.status as keyof typeof STATUS_OCORRENCIA_LABEL
+    ] ?? statusPrincipal
+  )
 }
 
 function statusVariant(o: Ocorrencia) {
-  if (o.status_tratativa && tratativaBadge[o.status_tratativa]) return tratativaBadge[o.status_tratativa]
+  const statusPrincipal = getStatusPrincipal(o)
+
+  if (statusPrincipal && tratativaBadge[statusPrincipal]) {
+    return tratativaBadge[statusPrincipal]
+  }
+
   return statusBadge[o.status] ?? 'gray'
 }
 
 const statusOptions = [
   { value: '', label: 'Todos os status' },
-  ...Object.entries(STATUS_OCORRENCIA_LABEL).map(([v, l]) => ({ value: v, label: l })),
+  ...Object.entries(STATUS_OCORRENCIA_LABEL).map(([value, label]) => ({
+    value,
+    label,
+  })),
+  ...Object.entries(STATUS_TRATATIVA_LABEL).map(([value, label]) => ({
+    value,
+    label,
+  })),
 ]
 
 const gravidadeOptions = [
   { value: '', label: 'Toda gravidade' },
-  ...Object.entries(GRAVIDADE_LABEL).map(([v, l]) => ({ value: v, label: l })),
+  ...Object.entries(GRAVIDADE_LABEL).map(([value, label]) => ({
+    value,
+    label,
+  })),
 ]
 
 const responsavelOptions = [
   { value: '', label: 'Todos responsáveis' },
-  ...Object.entries(RESPONSAVEL_OCORRENCIA_LABEL).map(([v, l]) => ({ value: v, label: l })),
+  ...Object.entries(RESPONSAVEL_OCORRENCIA_LABEL).map(([value, label]) => ({
+    value,
+    label,
+  })),
 ]
 
-export function OcorrenciasCliente({ ocorrenciasIniciais, contadores }: Props) {
+export function OcorrenciasCliente({ ocorrenciasIniciais }: Props) {
   const router = useRouter()
+
   const [busca, setBusca] = useState('')
   const [filtroStatus, setFiltroStatus] = useState('')
   const [filtroGravidade, setFiltroGravidade] = useState('')
   const [filtroResponsavel, setFiltroResponsavel] = useState('')
 
+  const contadoresTela = useMemo(() => {
+    const ativas = ocorrenciasIniciais.filter(isAtiva)
+
+    return {
+      abertas: ativas.length,
+      criticas: ativas.filter((o) => o.gravidade === 'critica').length,
+      emAnalise: ativas.filter((o) => {
+        const statusPrincipal = getStatusPrincipal(o)
+
+        return (
+          o.status === 'em_analise' ||
+          statusPrincipal === 'em_analise_manutencao'
+        )
+      }).length,
+      aguardando: ativas.filter((o) => {
+        const statusPrincipal = getStatusPrincipal(o)
+
+        return (
+          o.status === 'aguardando_manutencao' ||
+          statusPrincipal === 'encaminhado_manutencao' ||
+          statusPrincipal === 'aguardando_devolutiva_manutencao' ||
+          statusPrincipal === 'aguardando_envio_oficina'
+        )
+      }).length,
+    }
+  }, [ocorrenciasIniciais])
+
   const filtradas = useMemo(() => {
     return ocorrenciasIniciais.filter((o) => {
-      const t = busca.toLowerCase()
-      const matchBusca = !busca ||
-        o.descricao.toLowerCase().includes(t) ||
-        (o.veiculos?.placa ?? '').toLowerCase().includes(t) ||
-        (o.checklist_items?.nome ?? '').toLowerCase().includes(t) ||
-        String(o.numero).includes(t)
-      const matchStatus = !filtroStatus || o.status === filtroStatus
-      const matchGravidade = !filtroGravidade || o.gravidade === filtroGravidade
-      const matchResponsavel = !filtroResponsavel || o.responsavel === filtroResponsavel
+      const termo = busca.toLowerCase().trim()
+      const statusPrincipal = getStatusPrincipal(o)
+
+      const matchBusca =
+        !termo ||
+        o.descricao.toLowerCase().includes(termo) ||
+        (o.veiculos?.placa ?? '').toLowerCase().includes(termo) ||
+        (o.veiculos?.codigo_frota ?? '').toLowerCase().includes(termo) ||
+        (o.checklist_items?.nome ?? '').toLowerCase().includes(termo) ||
+        String(o.numero).includes(termo)
+
+      const matchStatus =
+        !filtroStatus ||
+        o.status === filtroStatus ||
+        o.status_tratativa === filtroStatus ||
+        statusPrincipal === filtroStatus
+
+      const matchGravidade =
+        !filtroGravidade || o.gravidade === filtroGravidade
+
+      const matchResponsavel =
+        !filtroResponsavel || o.responsavel === filtroResponsavel
+
       return matchBusca && matchStatus && matchGravidade && matchResponsavel
     })
-  }, [ocorrenciasIniciais, busca, filtroStatus, filtroGravidade, filtroResponsavel])
+  }, [
+    ocorrenciasIniciais,
+    busca,
+    filtroStatus,
+    filtroGravidade,
+    filtroResponsavel,
+  ])
 
-  const abertas = filtradas.filter((o) => !isEncerrada(o.status))
-  const resolvidas = filtradas.filter((o) => isEncerrada(o.status))
+  const ocorrenciasAtivas = filtradas.filter(isAtiva)
+  const ocorrenciasEncerradas = filtradas.filter(isEncerrada)
 
   return (
     <div className="flex-1 p-6 space-y-5">
-      {/* Contadores rápidos */}
       <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
         <StatCard
           title="Abertas"
-          value={contadores.abertas}
+          value={contadoresTela.abertas}
           icon={AlertTriangle}
-          color={contadores.abertas > 0 ? 'red' : 'green'}
+          color={contadoresTela.abertas > 0 ? 'red' : 'green'}
         />
+
         <StatCard
           title="Críticas"
-          value={contadores.criticas}
+          value={contadoresTela.criticas}
           icon={XCircle}
-          color={contadores.criticas > 0 ? 'red' : 'green'}
+          color={contadoresTela.criticas > 0 ? 'red' : 'green'}
         />
+
         <StatCard
           title="Em análise"
-          value={contadores.emAnalise}
+          value={contadoresTela.emAnalise}
           icon={Eye}
-          color={contadores.emAnalise > 0 ? 'orange' : 'slate'}
+          color={contadoresTela.emAnalise > 0 ? 'orange' : 'slate'}
         />
+
         <StatCard
           title="Aguard. manutenção"
-          value={contadores.aguardando}
+          value={contadoresTela.aguardando}
           icon={Clock}
-          color={contadores.aguardando > 0 ? 'yellow' : 'slate'}
+          color={contadoresTela.aguardando > 0 ? 'yellow' : 'slate'}
         />
       </div>
 
-      {/* Filtros */}
       <div className="flex flex-wrap items-center gap-3">
         <SearchInput
           value={busca}
@@ -157,27 +289,36 @@ export function OcorrenciasCliente({ ocorrenciasIniciais, contadores }: Props) {
           placeholder="Buscar por placa, item, descrição..."
           className="w-64"
         />
+
         <Select
           options={statusOptions}
           value={filtroStatus}
           onChange={(e) => setFiltroStatus(e.target.value)}
-          className="w-44"
+          className="w-56"
         />
+
         <Select
           options={gravidadeOptions}
           value={filtroGravidade}
           onChange={(e) => setFiltroGravidade(e.target.value)}
           className="w-40"
         />
+
         <Select
           options={responsavelOptions}
           value={filtroResponsavel}
           onChange={(e) => setFiltroResponsavel(e.target.value)}
           className="w-44"
         />
+
         {(busca || filtroStatus || filtroGravidade || filtroResponsavel) && (
           <button
-            onClick={() => { setBusca(''); setFiltroStatus(''); setFiltroGravidade(''); setFiltroResponsavel('') }}
+            onClick={() => {
+              setBusca('')
+              setFiltroStatus('')
+              setFiltroGravidade('')
+              setFiltroResponsavel('')
+            }}
             className="text-xs text-slate-500 hover:text-slate-700 flex items-center gap-1"
           >
             <Filter className="w-3.5 h-3.5" />
@@ -186,19 +327,28 @@ export function OcorrenciasCliente({ ocorrenciasIniciais, contadores }: Props) {
         )}
       </div>
 
-      {/* Ocorrências em aberto */}
-      {(filtroStatus === '' || !isEncerrada(filtroStatus)) && (
+      {(filtroStatus === '' ||
+        ocorrenciasAtivas.some((o) => {
+          const statusPrincipal = getStatusPrincipal(o)
+
+          return (
+            o.status === filtroStatus ||
+            o.status_tratativa === filtroStatus ||
+            statusPrincipal === filtroStatus
+          )
+        })) && (
         <div>
           <h2 className="text-sm font-semibold text-slate-700 mb-3">
-            Em andamento ({abertas.length})
+            Pendências em tratamento ({ocorrenciasAtivas.length})
           </h2>
+
           <Card padding="none">
             <Table
-              data={abertas}
+              data={ocorrenciasAtivas}
               rowKey={(o) => o.id}
               emptyIcon={CheckCircle2}
-              emptyTitle="Nenhuma ocorrência em aberto"
-              emptyDescription="Todos os itens estão conformes"
+              emptyTitle="Nenhuma pendência em tratamento"
+              emptyDescription="Não há ocorrências ativas no momento"
               onRowClick={(o) => router.push(`/ocorrencias/${o.id}`)}
               columns={[
                 {
@@ -206,7 +356,9 @@ export function OcorrenciasCliente({ ocorrenciasIniciais, contadores }: Props) {
                   label: '#',
                   className: 'w-16',
                   render: (o) => (
-                    <span className="text-slate-400 text-xs font-mono">#{o.numero}</span>
+                    <span className="text-slate-400 text-xs font-mono">
+                      #{o.numero}
+                    </span>
                   ),
                 },
                 {
@@ -215,7 +367,9 @@ export function OcorrenciasCliente({ ocorrenciasIniciais, contadores }: Props) {
                   className: 'w-28',
                   render: (o) => (
                     <Badge variant={gravidadeBadge[o.gravidade] ?? 'gray'}>
-                      {GRAVIDADE_LABEL[o.gravidade as keyof typeof GRAVIDADE_LABEL] ?? o.gravidade}
+                      {GRAVIDADE_LABEL[
+                        o.gravidade as keyof typeof GRAVIDADE_LABEL
+                      ] ?? o.gravidade}
                     </Badge>
                   ),
                 },
@@ -228,7 +382,9 @@ export function OcorrenciasCliente({ ocorrenciasIniciais, contadores }: Props) {
                         {o.veiculos?.placa ?? '—'}
                       </p>
                       <p className="text-xs text-slate-400">
-                        {TIPO_VEICULO_LABEL[o.veiculos?.tipo as keyof typeof TIPO_VEICULO_LABEL] ?? '—'}
+                        {TIPO_VEICULO_LABEL[
+                          o.veiculos?.tipo as keyof typeof TIPO_VEICULO_LABEL
+                        ] ?? '—'}
                       </p>
                     </div>
                   ),
@@ -237,14 +393,18 @@ export function OcorrenciasCliente({ ocorrenciasIniciais, contadores }: Props) {
                   key: 'item',
                   label: 'Item',
                   render: (o) => (
-                    <span className="text-slate-600 text-sm">{o.checklist_items?.nome ?? '—'}</span>
+                    <span className="text-slate-600 text-sm">
+                      {o.checklist_items?.nome ?? '—'}
+                    </span>
                   ),
                 },
                 {
                   key: 'descricao',
                   label: 'Descrição',
                   render: (o) => (
-                    <span className="text-slate-500 text-sm line-clamp-1">{o.descricao}</span>
+                    <span className="text-slate-500 text-sm line-clamp-1">
+                      {o.descricao}
+                    </span>
                   ),
                 },
                 {
@@ -257,11 +417,28 @@ export function OcorrenciasCliente({ ocorrenciasIniciais, contadores }: Props) {
                   ),
                 },
                 {
+                  key: 'email',
+                  label: 'E-mail',
+                  render: (o) => {
+                    if (o.email_status === 'enviado') {
+                      return <Badge variant="green">Enviado</Badge>
+                    }
+
+                    if (o.email_status === 'erro') {
+                      return <Badge variant="red">Erro</Badge>
+                    }
+
+                    return <Badge variant="gray">Não enviado</Badge>
+                  },
+                },
+                {
                   key: 'responsavel',
                   label: 'Responsável',
                   render: (o) => (
                     <span className="text-slate-500 text-sm">
-                      {RESPONSAVEL_OCORRENCIA_LABEL[o.responsavel as keyof typeof RESPONSAVEL_OCORRENCIA_LABEL] ?? '—'}
+                      {RESPONSAVEL_OCORRENCIA_LABEL[
+                        o.responsavel as keyof typeof RESPONSAVEL_OCORRENCIA_LABEL
+                      ] ?? '—'}
                     </span>
                   ),
                 },
@@ -269,20 +446,50 @@ export function OcorrenciasCliente({ ocorrenciasIniciais, contadores }: Props) {
                   key: 'prazo',
                   label: 'Prazo',
                   render: (o) => {
-                    if (!o.prazo) return <span className="text-slate-300 text-xs">—</span>
+                    if (!o.prazo) {
+                      return <span className="text-slate-300 text-xs">—</span>
+                    }
+
                     const dias = diasAteVencer(o.prazo)
-                    if (dias === null) return <span className="text-slate-400 text-xs">{formatarData(o.prazo)}</span>
-                    if (dias < 0) return <Badge variant="red">{Math.abs(dias)}d vencido</Badge>
-                    if (dias <= 2) return <Badge variant="red">{dias}d</Badge>
-                    if (dias <= 7) return <Badge variant="yellow">{dias}d</Badge>
-                    return <span className="text-slate-400 text-xs">{formatarData(o.prazo)}</span>
+
+                    if (dias === null) {
+                      return (
+                        <span className="text-slate-400 text-xs">
+                          {formatarData(o.prazo)}
+                        </span>
+                      )
+                    }
+
+                    if (dias < 0) {
+                      return (
+                        <Badge variant="red">
+                          {Math.abs(dias)}d vencido
+                        </Badge>
+                      )
+                    }
+
+                    if (dias <= 2) {
+                      return <Badge variant="red">{dias}d</Badge>
+                    }
+
+                    if (dias <= 7) {
+                      return <Badge variant="yellow">{dias}d</Badge>
+                    }
+
+                    return (
+                      <span className="text-slate-400 text-xs">
+                        {formatarData(o.prazo)}
+                      </span>
+                    )
                   },
                 },
                 {
                   key: 'criado',
                   label: 'Aberta em',
                   render: (o) => (
-                    <span className="text-slate-400 text-xs">{formatarData(o.criado_em)}</span>
+                    <span className="text-slate-400 text-xs">
+                      {formatarData(o.criado_em)}
+                    </span>
                   ),
                 },
               ]}
@@ -291,15 +498,15 @@ export function OcorrenciasCliente({ ocorrenciasIniciais, contadores }: Props) {
         </div>
       )}
 
-      {/* Histórico resolvidas */}
-      {(filtroStatus === '' || isEncerrada(filtroStatus)) && resolvidas.length > 0 && (
+      {ocorrenciasEncerradas.length > 0 && (
         <div>
           <h2 className="text-sm font-semibold text-slate-700 mb-3">
-            Encerradas ({resolvidas.length})
+            Encerradas ({ocorrenciasEncerradas.length})
           </h2>
+
           <Card padding="none">
             <Table
-              data={resolvidas}
+              data={ocorrenciasEncerradas}
               rowKey={(o) => o.id}
               emptyIcon={CheckCircle2}
               emptyTitle="Nenhuma ocorrência encerrada"
@@ -310,7 +517,9 @@ export function OcorrenciasCliente({ ocorrenciasIniciais, contadores }: Props) {
                   label: '#',
                   className: 'w-16',
                   render: (o) => (
-                    <span className="text-slate-400 text-xs font-mono">#{o.numero}</span>
+                    <span className="text-slate-400 text-xs font-mono">
+                      #{o.numero}
+                    </span>
                   ),
                 },
                 {
@@ -326,7 +535,9 @@ export function OcorrenciasCliente({ ocorrenciasIniciais, contadores }: Props) {
                   key: 'item',
                   label: 'Item',
                   render: (o) => (
-                    <span className="text-slate-500 text-sm">{o.checklist_items?.nome ?? '—'}</span>
+                    <span className="text-slate-500 text-sm">
+                      {o.checklist_items?.nome ?? '—'}
+                    </span>
                   ),
                 },
                 {
@@ -334,7 +545,9 @@ export function OcorrenciasCliente({ ocorrenciasIniciais, contadores }: Props) {
                   label: 'Gravidade',
                   render: (o) => (
                     <Badge variant={gravidadeBadge[o.gravidade] ?? 'gray'}>
-                      {GRAVIDADE_LABEL[o.gravidade as keyof typeof GRAVIDADE_LABEL] ?? o.gravidade}
+                      {GRAVIDADE_LABEL[
+                        o.gravidade as keyof typeof GRAVIDADE_LABEL
+                      ] ?? o.gravidade}
                     </Badge>
                   ),
                 },
