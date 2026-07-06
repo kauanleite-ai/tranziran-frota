@@ -312,7 +312,7 @@ export async function finalizarAuditoria(input: FinalizarAuditoriaInput) {
       if (resp.fotos && resp.fotos.length > 0) {
         const fotosPayload = resp.fotos.map((f) => ({
           auditoria_id: input.auditoria_id,
-          resposta_id: respostaSalva.id,
+          auditoria_resposta_id: respostaSalva.id,
           storage_path: f.storage_path,
           nome_original: f.nome_original,
           tamanho_bytes: f.tamanho_bytes,
@@ -401,7 +401,7 @@ export async function finalizarAuditoria(input: FinalizarAuditoriaInput) {
           await supabase
             .from('checklist_fotos')
             .update({ ocorrencia_id: ocorrencia.id })
-            .eq('resposta_id', respostaSalva.id)
+            .eq('auditoria_resposta_id', respostaSalva.id)
 
           await encaminharOcorrenciaParaManutencao(ocorrencia.id)
         }
@@ -569,12 +569,44 @@ export async function buscarAuditoriaCompleta(auditoriaId: string) {
       checklist_items(
         id, nome, item_critico,
         checklist_categorias(nome)
-      ),
-      checklist_fotos(id, storage_path, nome_original)
+      )
     `)
     .eq('auditoria_id', auditoriaId)
 
   if (errRespostas) throw new Error(errRespostas.message)
 
-  return { auditoria, respostas: respostas ?? [] }
+  const respostasLista = respostas ?? []
+  const respostaIds = respostasLista.map((r) => r.id)
+
+  let fotosPorResposta = new Map<string, Array<{ id: string; storage_path: string; nome_original: string }>>()
+
+  if (respostaIds.length > 0) {
+    const { data: fotos, error: errFotos } = await supabase
+      .from('checklist_fotos')
+      .select('id, storage_path, nome_original, auditoria_resposta_id')
+      .eq('auditoria_id', auditoriaId)
+      .in('auditoria_resposta_id', respostaIds)
+
+    if (errFotos) throw new Error(errFotos.message)
+
+    fotosPorResposta = new Map()
+    ;(fotos ?? []).forEach((foto) => {
+      const respostaId = foto.auditoria_resposta_id as string | null
+      if (!respostaId) return
+      if (!fotosPorResposta.has(respostaId)) fotosPorResposta.set(respostaId, [])
+      fotosPorResposta.get(respostaId)!.push({
+        id: foto.id,
+        storage_path: foto.storage_path,
+        nome_original: foto.nome_original,
+      })
+    })
+  }
+
+  return {
+    auditoria,
+    respostas: respostasLista.map((resposta) => ({
+      ...resposta,
+      checklist_fotos: fotosPorResposta.get(resposta.id) ?? [],
+    })),
+  }
 }

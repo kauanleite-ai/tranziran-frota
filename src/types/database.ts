@@ -239,6 +239,7 @@ export interface ChecklistFoto {
   id: string
   checklist_id: string | null
   resposta_id: string | null
+  auditoria_resposta_id: string | null
   auditoria_id: string | null
   ocorrencia_id: string | null
   storage_path: string
