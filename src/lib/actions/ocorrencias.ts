@@ -3,7 +3,8 @@
 import { createClient } from '@/lib/supabase/server'
 import { revalidatePath } from 'next/cache'
 import { INTERVALO_AUDITORIA_DIAS } from '@/lib/constants'
-import { encaminharOcorrenciaParaManutencao } from '@/lib/email/ocorrencias'
+import nodemailer from 'nodemailer'
+import { randomUUID } from 'crypto'
 
 // ============================================================
 // TIPOS
@@ -18,6 +19,545 @@ export type FiltrosOcorrencia = {
   busca?: string
 }
 
+type FotoOcorrencia = {
+  id: string
+  storage_path: string
+  nome_original: string
+  criado_em: string
+}
+
+type OcorrenciaBase = {
+  id: string
+  numero: number
+  descricao: string
+  gravidade: string
+  responsavel: string
+  prazo: string | null
+  status: string
+  status_tratativa: string | null
+  bloqueante: boolean | null
+  email_status: string | null
+  email_erro?: string | null
+  email_enviado_em: string | null
+  email_destinatarios?: string | null
+  protocolo_email?: string | null
+  token_manutencao?: string | null
+  data_encaminhado_manutencao?: string | null
+  data_devolutiva_manutencao?: string | null
+  data_solicitado_oficina?: string | null
+  data_entrada_oficina?: string | null
+  data_saida_oficina?: string | null
+  data_validacao_frota?: string | null
+  dias_em_oficina?: number | null
+  dias_pendencia_total?: number | null
+  devolutiva_manutencao?: string | null
+  criado_em: string
+  data_resolucao: string | null
+  veiculo_id: string
+  checklist_id: string | null
+  auditoria_id: string | null
+  item_id: string | null
+}
+
+type VeiculoResumo = {
+  id: string
+  placa: string
+  codigo_frota: string | null
+  tipo: string
+  fabricante?: string | null
+  modelo?: string | null
+}
+
+type ItemResumo = {
+  id: string
+  nome: string
+  item_critico?: boolean | null
+  checklist_categorias?: { nome: string } | null
+}
+
+// ============================================================
+// HELPERS
+// ============================================================
+
+function calcularDiasEntre(inicio?: string | null, fim?: string | null) {
+  if (!inicio || !fim) return null
+
+  const ms = new Date(fim).getTime() - new Date(inicio).getTime()
+
+  if (Number.isNaN(ms) || ms < 0) return null
+
+  return Math.round((ms / 1000 / 60 / 60 / 24) * 100) / 100
+}
+
+function normalizarSenhaSMTP(senha?: string) {
+  return (senha ?? '').replace(/\s+/g, '').trim()
+}
+
+function htmlEscape(valor: unknown) {
+  return String(valor ?? '')
+    .replaceAll('&', '&amp;')
+    .replaceAll('<', '&lt;')
+    .replaceAll('>', '&gt;')
+    .replaceAll('"', '&quot;')
+    .replaceAll("'", '&#039;')
+}
+
+async function buscarVeiculoPorId(
+  supabase: Awaited<ReturnType<typeof createClient>>,
+  veiculoId?: string | null
+) {
+  if (!veiculoId) return null
+
+  const { data, error } = await supabase
+    .from('veiculos')
+    .select('id, placa, codigo_frota, tipo, fabricante, modelo')
+    .eq('id', veiculoId)
+    .maybeSingle()
+
+  if (error) {
+    console.error('Erro ao buscar veículo:', error)
+    return null
+  }
+
+  return data as VeiculoResumo | null
+}
+
+async function buscarItemPorId(
+  supabase: Awaited<ReturnType<typeof createClient>>,
+  itemId?: string | null
+) {
+  if (!itemId) return null
+
+  const { data, error } = await supabase
+    .from('checklist_items')
+    .select(`
+      id,
+      nome,
+      item_critico,
+      checklist_categorias (
+        nome
+      )
+    `)
+    .eq('id', itemId)
+    .maybeSingle()
+
+  if (error) {
+    console.error('Erro ao buscar item:', error)
+    return null
+  }
+
+  const item = data as unknown as ItemResumo | ItemResumo[] | null
+
+  if (Array.isArray(item)) return item[0] ?? null
+
+  return item
+}
+
+async function enriquecerOcorrencias(
+  supabase: Awaited<ReturnType<typeof createClient>>,
+  ocorrencias: OcorrenciaBase[]
+) {
+  const veiculoIds = [
+    ...new Set(ocorrencias.map((o) => o.veiculo_id).filter(Boolean)),
+  ]
+
+  const itemIds = [
+    ...new Set(ocorrencias.map((o) => o.item_id).filter(Boolean)),
+  ]
+
+  const veiculosMap = new Map<string, VeiculoResumo>()
+  const itensMap = new Map<string, ItemResumo>()
+
+  if (veiculoIds.length > 0) {
+    const { data: veiculos, error } = await supabase
+      .from('veiculos')
+      .select('id, placa, codigo_frota, tipo, fabricante, modelo')
+      .in('id', veiculoIds)
+
+    if (error) {
+      console.error('Erro ao buscar veículos da listagem:', error)
+    }
+
+    for (const veiculo of (veiculos ?? []) as VeiculoResumo[]) {
+      veiculosMap.set(veiculo.id, veiculo)
+    }
+  }
+
+  if (itemIds.length > 0) {
+    const { data: itens, error } = await supabase
+      .from('checklist_items')
+      .select('id, nome, item_critico')
+      .in('id', itemIds)
+
+    if (error) {
+      console.error('Erro ao buscar itens da listagem:', error)
+    }
+
+    for (const item of (itens ?? []) as ItemResumo[]) {
+      itensMap.set(item.id, item)
+    }
+  }
+
+  return ocorrencias.map((ocorrencia) => ({
+    ...ocorrencia,
+    veiculos: veiculosMap.get(ocorrencia.veiculo_id) ?? null,
+    checklist_items: ocorrencia.item_id
+      ? itensMap.get(ocorrencia.item_id) ?? null
+      : null,
+  }))
+}
+
+async function buscarFotosDaOcorrencia(
+  supabase: Awaited<ReturnType<typeof createClient>>,
+  ocorrencia: Pick<
+    OcorrenciaBase,
+    'id' | 'checklist_id' | 'auditoria_id' | 'item_id'
+  >
+) {
+  const fotosMap = new Map<string, FotoOcorrencia>()
+
+  const { data: fotosDiretas } = await supabase
+    .from('checklist_fotos')
+    .select('id, storage_path, nome_original, criado_em')
+    .eq('ocorrencia_id', ocorrencia.id)
+    .order('criado_em', { ascending: true })
+
+  for (const foto of (fotosDiretas ?? []) as FotoOcorrencia[]) {
+    fotosMap.set(foto.id, foto)
+  }
+
+  if (ocorrencia.item_id && ocorrencia.checklist_id) {
+    const { data: respostasOrigem } = await supabase
+      .from('checklist_respostas')
+      .select('id')
+      .eq('checklist_id', ocorrencia.checklist_id)
+      .eq('item_id', ocorrencia.item_id)
+
+    const respostaIds = (respostasOrigem ?? []).map((r) => r.id)
+
+    if (respostaIds.length > 0) {
+      const { data: fotosOrigem } = await supabase
+        .from('checklist_fotos')
+        .select('id, storage_path, nome_original, criado_em')
+        .in('resposta_id', respostaIds)
+        .order('criado_em', { ascending: true })
+
+      for (const foto of (fotosOrigem ?? []) as FotoOcorrencia[]) {
+        fotosMap.set(foto.id, foto)
+      }
+    }
+  }
+
+  if (ocorrencia.item_id && ocorrencia.auditoria_id) {
+    const { data: respostasOrigem } = await supabase
+      .from('auditoria_respostas')
+      .select('id')
+      .eq('auditoria_id', ocorrencia.auditoria_id)
+      .eq('item_id', ocorrencia.item_id)
+
+    const respostaIds = (respostasOrigem ?? []).map((r) => r.id)
+
+    if (respostaIds.length > 0) {
+      const { data: fotosOrigem } = await supabase
+        .from('checklist_fotos')
+        .select('id, storage_path, nome_original, criado_em')
+        .in('resposta_id', respostaIds)
+        .order('criado_em', { ascending: true })
+
+      for (const foto of (fotosOrigem ?? []) as FotoOcorrencia[]) {
+        fotosMap.set(foto.id, foto)
+      }
+    }
+  }
+
+  return [...fotosMap.values()].sort(
+    (a, b) =>
+      new Date(a.criado_em).getTime() - new Date(b.criado_em).getTime()
+  )
+}
+
+async function gerarLinksFotos(
+  supabase: Awaited<ReturnType<typeof createClient>>,
+  fotos: FotoOcorrencia[]
+) {
+  const links: { nome: string; url: string }[] = []
+
+  for (const foto of fotos) {
+    const { data, error } = await supabase.storage
+      .from('checklist-fotos')
+      .createSignedUrl(foto.storage_path, 60 * 60 * 24 * 7)
+
+    if (error || !data?.signedUrl) {
+      console.error('Erro ao gerar link assinado da foto:', error)
+      continue
+    }
+
+    links.push({
+      nome: foto.nome_original,
+      url: data.signedUrl,
+    })
+  }
+
+  return links
+}
+
+async function enviarEmailSMTP({
+  to,
+  subject,
+  html,
+}: {
+  to: string[]
+  subject: string
+  html: string
+}) {
+  const smtpUser = process.env.SMTP_USER
+  const smtpPass = normalizarSenhaSMTP(process.env.SMTP_PASS)
+
+  if (!smtpUser || !smtpPass) {
+    throw new Error('SMTP_USER ou SMTP_PASS não configurado na Vercel.')
+  }
+
+  const transporter = nodemailer.createTransport({
+    host: process.env.SMTP_HOST || 'smtp.gmail.com',
+    port: Number(process.env.SMTP_PORT || 465),
+    secure: String(process.env.SMTP_SECURE ?? 'true') === 'true',
+    auth: {
+      user: smtpUser,
+      pass: smtpPass,
+    },
+  })
+
+  const result = await transporter.sendMail({
+    from: process.env.EMAIL_FROM || `Tranziran Frota <${smtpUser}>`,
+    to,
+    subject,
+    html,
+  })
+
+  return result
+}
+
+async function encaminharOcorrenciaParaManutencaoSeguro(
+  ocorrenciaId: string,
+  opcoes?: { falharAoErro?: boolean }
+) {
+  const supabase = await createClient()
+
+  const { data: ocorrenciaRaw, error } = await supabase
+    .from('ocorrencias')
+    .select(`
+      id,
+      numero,
+      descricao,
+      gravidade,
+      responsavel,
+      prazo,
+      status,
+      status_tratativa,
+      bloqueante,
+      email_status,
+      email_erro,
+      email_enviado_em,
+      email_destinatarios,
+      protocolo_email,
+      token_manutencao,
+      veiculo_id,
+      checklist_id,
+      auditoria_id,
+      item_id,
+      criado_em
+    `)
+    .eq('id', ocorrenciaId)
+    .maybeSingle()
+
+  if (error || !ocorrenciaRaw) {
+    console.error('Erro ao buscar ocorrência para envio de e-mail:', error)
+    throw new Error('Ocorrência não encontrada para envio de e-mail.')
+  }
+
+  const ocorrencia =
+    ocorrenciaRaw as OcorrenciaBase & { token_manutencao?: string | null }
+
+  const veiculo = await buscarVeiculoPorId(supabase, ocorrencia.veiculo_id)
+  const item = await buscarItemPorId(supabase, ocorrencia.item_id)
+  const fotos = await buscarFotosDaOcorrencia(supabase, ocorrencia)
+  const linksFotos = await gerarLinksFotos(supabase, fotos)
+
+  const destinatarios = (process.env.MANUTENCAO_EMAILS || '')
+    .split(',')
+    .map((email) => email.trim())
+    .filter(Boolean)
+
+  if (destinatarios.length === 0) {
+    await supabase
+      .from('ocorrencias')
+      .update({
+        email_status: 'erro',
+        email_erro: 'MANUTENCAO_EMAILS não configurado.',
+      })
+      .eq('id', ocorrenciaId)
+
+    throw new Error('MANUTENCAO_EMAILS não configurado na Vercel.')
+  }
+
+  const token = ocorrencia.token_manutencao || randomUUID()
+  const appUrl =
+    process.env.NEXT_PUBLIC_APP_URL || 'https://tranziran-frota.vercel.app'
+
+  const linkDevolutiva = `${appUrl}/manutencao/ocorrencias/${token}`
+  const linkOcorrencia = `${appUrl}/ocorrencias/${ocorrencia.id}`
+
+  const fotosHtml =
+    linksFotos.length > 0
+      ? linksFotos
+          .map(
+            (foto, index) => `
+              <li>
+                <a href="${foto.url}" target="_blank" rel="noreferrer">
+                  Foto ${index + 1} - ${htmlEscape(foto.nome)}
+                </a>
+              </li>
+            `
+          )
+          .join('')
+      : '<li>Sem fotos vinculadas.</li>'
+
+  const placa = veiculo?.placa ?? 'Sem placa'
+  const assunto = `[OC-${ocorrencia.numero}] Não conformidade — Veículo ${placa}`
+
+  const html = `
+    <div style="font-family:Arial,sans-serif;line-height:1.5;color:#0f172a">
+      <h2>Ocorrência #${htmlEscape(ocorrencia.numero)} — Não conformidade identificada</h2>
+
+      <p>Foi registrada uma não conformidade no sistema de checklist da frota.</p>
+
+      <table style="border-collapse:collapse;width:100%;max-width:760px">
+        <tr>
+          <td style="border:1px solid #e2e8f0;padding:8px;font-weight:bold">Veículo</td>
+          <td style="border:1px solid #e2e8f0;padding:8px">${htmlEscape(placa)}</td>
+        </tr>
+        <tr>
+          <td style="border:1px solid #e2e8f0;padding:8px;font-weight:bold">Frota</td>
+          <td style="border:1px solid #e2e8f0;padding:8px">${htmlEscape(veiculo?.codigo_frota ?? '—')}</td>
+        </tr>
+        <tr>
+          <td style="border:1px solid #e2e8f0;padding:8px;font-weight:bold">Tipo</td>
+          <td style="border:1px solid #e2e8f0;padding:8px">${htmlEscape(veiculo?.tipo ?? '—')}</td>
+        </tr>
+        <tr>
+          <td style="border:1px solid #e2e8f0;padding:8px;font-weight:bold">Item não conforme</td>
+          <td style="border:1px solid #e2e8f0;padding:8px">${htmlEscape(item?.nome ?? '—')}</td>
+        </tr>
+        <tr>
+          <td style="border:1px solid #e2e8f0;padding:8px;font-weight:bold">Descrição</td>
+          <td style="border:1px solid #e2e8f0;padding:8px">${htmlEscape(ocorrencia.descricao)}</td>
+        </tr>
+        <tr>
+          <td style="border:1px solid #e2e8f0;padding:8px;font-weight:bold">Gravidade</td>
+          <td style="border:1px solid #e2e8f0;padding:8px">${htmlEscape(ocorrencia.gravidade)}</td>
+        </tr>
+      </table>
+
+      <h3>Evidências fotográficas</h3>
+      <ul>
+        ${fotosHtml}
+      </ul>
+
+      <p style="margin-top:24px">
+        <a
+          href="${linkDevolutiva}"
+          target="_blank"
+          rel="noreferrer"
+          style="background:#2563eb;color:white;text-decoration:none;padding:12px 18px;border-radius:8px;display:inline-block;font-weight:bold"
+        >
+          Registrar devolutiva da manutenção
+        </a>
+      </p>
+
+      <p>
+        Link administrativo da ocorrência:
+        <br />
+        <a href="${linkOcorrencia}" target="_blank" rel="noreferrer">${linkOcorrencia}</a>
+      </p>
+
+      <p style="font-size:12px;color:#64748b;margin-top:24px">
+        Sistema Tranziran Frota & Auditoria
+      </p>
+    </div>
+  `
+
+  try {
+    const resultado = await enviarEmailSMTP({
+      to: destinatarios,
+      subject: assunto,
+      html,
+    })
+
+    const agora = new Date().toISOString()
+
+    await supabase
+      .from('ocorrencias')
+      .update({
+        status: 'aguardando_manutencao',
+        status_tratativa: 'encaminhado_manutencao',
+        token_manutencao: token,
+        email_status: 'enviado',
+        email_erro: null,
+        email_destinatarios: destinatarios.join(','),
+        email_enviado_em: agora,
+        protocolo_email: resultado.messageId ?? null,
+        data_encaminhado_manutencao: agora,
+      })
+      .eq('id', ocorrenciaId)
+
+    await supabase.from('ocorrencia_historico').insert({
+      ocorrencia_id: ocorrenciaId,
+      status_anterior: ocorrencia.status as never,
+      status_novo: 'aguardando_manutencao' as never,
+      observacao: `Ocorrência encaminhada para manutenção por e-mail. Destinatários: ${destinatarios.join(', ')}`,
+      feito_por: null,
+    })
+
+    if (ocorrencia.veiculo_id) {
+      await supabase
+        .from('veiculos')
+        .update({
+          status_operacional: 'encaminhado_manutencao',
+          bloqueado_checklist: true,
+          ocorrencia_bloqueante_id: ocorrenciaId,
+          bloqueio_motivo: `Ocorrência #${ocorrencia.numero} encaminhada para manutenção.`,
+        })
+        .eq('id', ocorrencia.veiculo_id)
+    }
+
+    return {
+      ok: true,
+      messageId: resultado.messageId,
+    }
+  } catch (erro) {
+    const mensagem = erro instanceof Error ? erro.message : String(erro)
+
+    await supabase
+      .from('ocorrencias')
+      .update({
+        email_status: 'erro',
+        email_erro: mensagem,
+      })
+      .eq('id', ocorrenciaId)
+
+    if (opcoes?.falharAoErro === false) {
+      console.error('Erro ao enviar e-mail de manutenção:', mensagem)
+
+      return {
+        ok: false,
+        erro: mensagem,
+      }
+    }
+
+    throw new Error(mensagem)
+  }
+}
+
 // ============================================================
 // LISTAGEM
 // ============================================================
@@ -28,11 +568,25 @@ export async function listarOcorrencias(filtros?: FiltrosOcorrencia) {
   let query = supabase
     .from('ocorrencias')
     .select(`
-      id, numero, descricao, gravidade, responsavel, prazo, status, status_tratativa, bloqueante,
-      email_status, email_enviado_em, data_entrada_oficina, data_saida_oficina,
-      criado_em, data_resolucao, checklist_id, auditoria_id, item_id,
-      veiculos(id, placa, codigo_frota, tipo),
-      checklist_items(id, nome)
+      id,
+      numero,
+      descricao,
+      gravidade,
+      responsavel,
+      prazo,
+      status,
+      status_tratativa,
+      bloqueante,
+      email_status,
+      email_enviado_em,
+      data_entrada_oficina,
+      data_saida_oficina,
+      criado_em,
+      data_resolucao,
+      checklist_id,
+      auditoria_id,
+      item_id,
+      veiculo_id
     `)
     .order('criado_em', { ascending: false })
     .limit(200)
@@ -41,21 +595,43 @@ export async function listarOcorrencias(filtros?: FiltrosOcorrencia) {
   if (filtros?.gravidade) query = query.eq('gravidade', filtros.gravidade)
   if (filtros?.responsavel) query = query.eq('responsavel', filtros.responsavel)
   if (filtros?.veiculo_id) query = query.eq('veiculo_id', filtros.veiculo_id)
-  if (filtros?.busca) {
-    query = query.or(
-      `descricao.ilike.%${filtros.busca}%,veiculos.placa.ilike.%${filtros.busca}%`
-    )
-  }
 
   const { data, error } = await query
+
   if (error) throw new Error(error.message)
-  return data ?? []
+
+  let ocorrencias = await enriquecerOcorrencias(
+    supabase,
+    (data ?? []) as OcorrenciaBase[]
+  )
+
+  if (filtros?.busca) {
+    const termo = filtros.busca.toLowerCase().trim()
+
+    ocorrencias = ocorrencias.filter((o) => {
+      return (
+        o.descricao.toLowerCase().includes(termo) ||
+        (o.veiculos?.placa ?? '').toLowerCase().includes(termo) ||
+        (o.veiculos?.codigo_frota ?? '').toLowerCase().includes(termo) ||
+        (o.checklist_items?.nome ?? '').toLowerCase().includes(termo) ||
+        String(o.numero).includes(termo)
+      )
+    })
+  }
+
+  return ocorrencias
 }
 
 export async function contadoresOcorrencias() {
   const supabase = await createClient()
 
   const statusEncerrados = ['resolvida', 'reprovada', 'cancelada']
+  const statusTratativaEncerrados = [
+    'validada_liberada',
+    'liberado_apos_validacao',
+    'liberada_apos_validacao',
+    'cancelada',
+  ]
 
   const { data, error } = await supabase
     .from('ocorrencias')
@@ -65,17 +641,32 @@ export async function contadoresOcorrencias() {
   if (error) throw new Error(error.message)
 
   const ocorrencias = data ?? []
-  const emAberto = ocorrencias.filter((o) => !statusEncerrados.includes(o.status))
+
+  const emAberto = ocorrencias.filter((o) => {
+    const statusTratativa = o.status_tratativa ?? ''
+
+    return (
+      !statusEncerrados.includes(o.status) &&
+      !statusTratativaEncerrados.includes(statusTratativa)
+    )
+  })
 
   return {
     abertas: emAberto.length,
     criticas: emAberto.filter((o) => o.gravidade === 'critica').length,
-    emAnalise: emAberto.filter((o) =>
-      o.status === 'em_analise' || o.status_tratativa === 'em_analise_manutencao'
+    emAnalise: emAberto.filter(
+      (o) =>
+        o.status === 'em_analise' ||
+        o.status_tratativa === 'em_analise_manutencao'
     ).length,
-    aguardando: emAberto.filter((o) =>
-      o.status === 'aguardando_manutencao' ||
-      ['encaminhado_manutencao', 'aguardando_devolutiva_manutencao'].includes(o.status_tratativa ?? '')
+    aguardando: emAberto.filter(
+      (o) =>
+        o.status === 'aguardando_manutencao' ||
+        [
+          'encaminhado_manutencao',
+          'aguardando_devolutiva_manutencao',
+          'aguardando_envio_oficina',
+        ].includes(o.status_tratativa ?? '')
     ).length,
   }
 }
@@ -87,117 +678,111 @@ export async function contadoresOcorrencias() {
 export async function buscarOcorrencia(id: string) {
   const supabase = await createClient()
 
-  const { data: ocorrencia, error } = await supabase
+  const { data: ocorrenciaRaw, error } = await supabase
     .from('ocorrencias')
     .select(`
-      id, numero, descricao, gravidade, responsavel, prazo, status, status_tratativa, bloqueante,
-      email_status, email_erro, email_enviado_em, email_destinatarios, protocolo_email,
-      data_encaminhado_manutencao, data_devolutiva_manutencao, data_solicitado_oficina,
-      data_entrada_oficina, data_saida_oficina, data_validacao_frota, dias_em_oficina,
-      dias_pendencia_total, devolutiva_manutencao, criado_em, data_resolucao, checklist_id, auditoria_id, item_id,
-      veiculos(id, placa, codigo_frota, tipo, fabricante, modelo),
-      checklist_items(
-        id, nome, item_critico,
-        checklist_categorias(nome)
-      ),
-      checklists(id, tipo, data_conclusao),
-      auditorias(id, data_conclusao)
+      id,
+      numero,
+      descricao,
+      gravidade,
+      responsavel,
+      prazo,
+      status,
+      status_tratativa,
+      bloqueante,
+      email_status,
+      email_erro,
+      email_enviado_em,
+      email_destinatarios,
+      protocolo_email,
+      data_encaminhado_manutencao,
+      data_devolutiva_manutencao,
+      data_solicitado_oficina,
+      data_entrada_oficina,
+      data_saida_oficina,
+      data_validacao_frota,
+      dias_em_oficina,
+      dias_pendencia_total,
+      devolutiva_manutencao,
+      criado_em,
+      data_resolucao,
+      checklist_id,
+      auditoria_id,
+      item_id,
+      veiculo_id
     `)
     .eq('id', id)
     .single()
 
   if (error) throw new Error(error.message)
 
-  // Busca histórico de movimentações
+  const ocorrenciaBase = ocorrenciaRaw as OcorrenciaBase
+
+  const veiculo = await buscarVeiculoPorId(supabase, ocorrenciaBase.veiculo_id)
+  const item = await buscarItemPorId(supabase, ocorrenciaBase.item_id)
+
+  const { data: checklist } = ocorrenciaBase.checklist_id
+    ? await supabase
+        .from('checklists')
+        .select('id, tipo, data_conclusao')
+        .eq('id', ocorrenciaBase.checklist_id)
+        .maybeSingle()
+    : { data: null }
+
+  const { data: auditoria } = ocorrenciaBase.auditoria_id
+    ? await supabase
+        .from('auditorias')
+        .select('id, data_conclusao')
+        .eq('id', ocorrenciaBase.auditoria_id)
+        .maybeSingle()
+    : { data: null }
+
+  const ocorrencia = {
+    ...ocorrenciaBase,
+    veiculos: veiculo,
+    checklist_items: item,
+    checklists: checklist,
+    auditorias: auditoria,
+  }
+
   const { data: historico, error: errHistorico } = await supabase
     .from('ocorrencia_historico')
-    .select(`
-      id, status_anterior, status_novo, observacao, criado_em,
-      feito_por
-    `)
+    .select('id, status_anterior, status_novo, observacao, criado_em, feito_por')
     .eq('ocorrencia_id', id)
     .order('criado_em', { ascending: true })
 
   if (errHistorico) throw new Error(errHistorico.message)
 
-  // Busca perfis dos usuários que aparecem no histórico
-  const userIds = [...new Set((historico ?? []).map((h) => h.feito_por))]
+  const userIds = [
+    ...new Set(
+      (historico ?? [])
+        .map((h) => h.feito_por)
+        .filter(Boolean)
+    ),
+  ]
+
   let perfisMap = new Map<string, string>()
+
   if (userIds.length > 0) {
     const { data: perfis } = await supabase
       .from('usuarios_perfis')
       .select('user_id, nome')
       .in('user_id', userIds)
+
     perfisMap = new Map((perfis ?? []).map((p) => [p.user_id, p.nome]))
   }
 
-  // Busca fotos da ocorrência.
-  // Regra nova: fotos futuras ficam vinculadas diretamente em checklist_fotos.ocorrencia_id.
-  // Regra de compatibilidade: ocorrências já criadas antes do ajuste podem ter fotos
-  // somente na resposta do checklist/auditoria. Por isso também buscamos pelo item de origem.
-  const fotosMap = new Map<string, { id: string; storage_path: string; nome_original: string; criado_em: string }>()
-
-  const { data: fotosDiretas } = await supabase
-    .from('checklist_fotos')
-    .select('id, storage_path, nome_original, criado_em')
-    .eq('ocorrencia_id', id)
-    .order('criado_em', { ascending: true })
-
-  for (const foto of fotosDiretas ?? []) fotosMap.set(foto.id, foto)
-
-  const origem = ocorrencia as unknown as {
-    checklist_id: string | null
-    auditoria_id: string | null
-    item_id: string | null
-  }
-
-  if (origem.item_id && origem.checklist_id) {
-    const { data: respostasOrigem } = await supabase
-      .from('checklist_respostas')
-      .select('id')
-      .eq('checklist_id', origem.checklist_id)
-      .eq('item_id', origem.item_id)
-
-    const respostaIds = (respostasOrigem ?? []).map((r) => r.id)
-    if (respostaIds.length > 0) {
-      const { data: fotosOrigem } = await supabase
-        .from('checklist_fotos')
-        .select('id, storage_path, nome_original, criado_em')
-        .in('resposta_id', respostaIds)
-        .order('criado_em', { ascending: true })
-
-      for (const foto of fotosOrigem ?? []) fotosMap.set(foto.id, foto)
-    }
-  }
-
-  if (origem.item_id && origem.auditoria_id) {
-    const { data: respostasOrigem } = await supabase
-      .from('auditoria_respostas')
-      .select('id')
-      .eq('auditoria_id', origem.auditoria_id)
-      .eq('item_id', origem.item_id)
-
-    const respostaIds = (respostasOrigem ?? []).map((r) => r.id)
-    if (respostaIds.length > 0) {
-      const { data: fotosOrigem } = await supabase
-        .from('checklist_fotos')
-        .select('id, storage_path, nome_original, criado_em')
-        .in('resposta_id', respostaIds)
-        .order('criado_em', { ascending: true })
-
-      for (const foto of fotosOrigem ?? []) fotosMap.set(foto.id, foto)
-    }
-  }
+  const fotos = await buscarFotosDaOcorrencia(supabase, ocorrenciaBase)
 
   return {
     ocorrencia,
     historico: (historico ?? []).map((h) => ({
       ...h,
-      nome_usuario: perfisMap.get(h.feito_por) ?? 'Usuário',
+      nome_usuario: h.feito_por
+        ? perfisMap.get(h.feito_por) ?? 'Usuário'
+        : 'Sistema',
     })),
-    fotos: [...fotosMap.values()].sort(
-      (a, b) => new Date(a.criado_em).getTime() - new Date(b.criado_em).getTime()
-    ),
+    fotos,
   }
 }
 
@@ -214,7 +799,10 @@ export async function criarOcorrencia(dados: {
   prazo?: string
 }) {
   const supabase = await createClient()
-  const { data: { user } } = await supabase.auth.getUser()
+  const {
+    data: { user },
+  } = await supabase.auth.getUser()
+
   if (!user) throw new Error('Não autenticado.')
 
   const { data, error } = await supabase
@@ -228,6 +816,7 @@ export async function criarOcorrencia(dados: {
       prazo: dados.prazo || null,
       status: 'aberta' as never,
       status_tratativa: 'nao_conformidade_aberta',
+      email_status: 'nao_enviado',
       bloqueante: true,
       aberta_por: user.id,
     })
@@ -236,10 +825,13 @@ export async function criarOcorrencia(dados: {
 
   if (error) throw new Error(error.message)
 
-  await encaminharOcorrenciaParaManutencao(data.id)
+  await encaminharOcorrenciaParaManutencaoSeguro(data.id, {
+    falharAoErro: false,
+  })
 
   revalidatePath('/ocorrencias')
   revalidatePath('/veiculos')
+
   return data
 }
 
@@ -253,7 +845,10 @@ export async function moverStatusOcorrencia(
   observacao?: string
 ) {
   const supabase = await createClient()
-  const { data: { user } } = await supabase.auth.getUser()
+  const {
+    data: { user },
+  } = await supabase.auth.getUser()
+
   if (!user) throw new Error('Não autenticado.')
 
   const { data: atual } = await supabase
@@ -278,8 +873,6 @@ export async function moverStatusOcorrencia(
 
   if (errUpdate) throw new Error(errUpdate.message)
 
-  // Registra no histórico manualmente (o trigger do banco já faz isso,
-  // mas garantimos aqui também com a observação do usuário)
   if (observacao?.trim()) {
     await supabase.from('ocorrencia_historico').insert({
       ocorrencia_id: id,
@@ -290,7 +883,6 @@ export async function moverStatusOcorrencia(
     })
   }
 
-  // Se resolvida, atualiza o estado atual do veículo para o item
   if (novoStatus === 'resolvida') {
     const { data: oc } = await supabase
       .from('ocorrencias')
@@ -339,11 +931,16 @@ export async function atualizarOcorrencia(
   const supabase = await createClient()
 
   const payload: Record<string, unknown> = {}
+
   if (dados.prazo !== undefined) payload.prazo = dados.prazo || null
   if (dados.responsavel) payload.responsavel = dados.responsavel as never
   if (dados.gravidade) payload.gravidade = dados.gravidade as never
 
-  const { error } = await supabase.from('ocorrencias').update(payload).eq('id', id)
+  const { error } = await supabase
+    .from('ocorrencias')
+    .update(payload)
+    .eq('id', id)
+
   if (error) throw new Error(error.message)
 
   revalidatePath(`/ocorrencias/${id}`)
@@ -356,10 +953,18 @@ export async function atualizarOcorrencia(
 
 export async function registrarFotoSolucao(
   ocorrenciaId: string,
-  foto: { storage_path: string; nome_original: string; tamanho_bytes: number; mime_type: string }
+  foto: {
+    storage_path: string
+    nome_original: string
+    tamanho_bytes: number
+    mime_type: string
+  }
 ) {
   const supabase = await createClient()
-  const { data: { user } } = await supabase.auth.getUser()
+  const {
+    data: { user },
+  } = await supabase.auth.getUser()
+
   if (!user) throw new Error('Não autenticado.')
 
   const { error } = await supabase.from('checklist_fotos').insert({
@@ -372,6 +977,7 @@ export async function registrarFotoSolucao(
   })
 
   if (error) throw new Error(error.message)
+
   revalidatePath(`/ocorrencias/${ocorrenciaId}`)
 }
 
@@ -379,24 +985,28 @@ export async function registrarFotoSolucao(
 // FLUXO NOVO — STATUS OPERACIONAL / MANUTENÇÃO
 // ============================================================
 
-function calcularDiasEntre(inicio?: string | null, fim?: string | null) {
-  if (!inicio || !fim) return null
-  const ms = new Date(fim).getTime() - new Date(inicio).getTime()
-  if (Number.isNaN(ms) || ms < 0) return null
-  return Math.round((ms / 1000 / 60 / 60 / 24) * 100) / 100
-}
-
 export async function reenviarEmailManutencao(ocorrenciaId: string) {
-  const resultado = await encaminharOcorrenciaParaManutencao(ocorrenciaId)
+  const resultado = await encaminharOcorrenciaParaManutencaoSeguro(
+    ocorrenciaId,
+    { falharAoErro: true }
+  )
+
   revalidatePath(`/ocorrencias/${ocorrenciaId}`)
   revalidatePath('/ocorrencias')
   revalidatePath('/veiculos')
+
   return resultado
 }
 
-export async function registrarEntradaOficina(ocorrenciaId: string, observacao?: string) {
+export async function registrarEntradaOficina(
+  ocorrenciaId: string,
+  observacao?: string
+) {
   const supabase = await createClient()
-  const { data: { user } } = await supabase.auth.getUser()
+  const {
+    data: { user },
+  } = await supabase.auth.getUser()
+
   if (!user) throw new Error('Não autenticado.')
 
   const agora = new Date().toISOString()
@@ -407,7 +1017,9 @@ export async function registrarEntradaOficina(ocorrenciaId: string, observacao?:
     .eq('id', ocorrenciaId)
     .single()
 
-  if (error || !ocorrencia) throw new Error(error?.message ?? 'Ocorrência não encontrada.')
+  if (error || !ocorrencia) {
+    throw new Error(error?.message ?? 'Ocorrência não encontrada.')
+  }
 
   const { error: errUpdate } = await supabase
     .from('ocorrencias')
@@ -430,7 +1042,10 @@ export async function registrarEntradaOficina(ocorrenciaId: string, observacao?:
 
   await supabase
     .from('veiculos')
-    .update({ status_operacional: 'em_oficina', bloqueado_checklist: true })
+    .update({
+      status_operacional: 'em_oficina',
+      bloqueado_checklist: true,
+    })
     .eq('id', ocorrencia.veiculo_id)
 
   revalidatePath(`/ocorrencias/${ocorrenciaId}`)
@@ -438,9 +1053,15 @@ export async function registrarEntradaOficina(ocorrenciaId: string, observacao?:
   revalidatePath('/veiculos')
 }
 
-export async function validarLiberarOcorrencia(ocorrenciaId: string, observacao?: string) {
+export async function validarLiberarOcorrencia(
+  ocorrenciaId: string,
+  observacao?: string
+) {
   const supabase = await createClient()
-  const { data: { user } } = await supabase.auth.getUser()
+  const {
+    data: { user },
+  } = await supabase.auth.getUser()
+
   if (!user) throw new Error('Não autenticado.')
 
   const agora = new Date().toISOString()
@@ -451,9 +1072,15 @@ export async function validarLiberarOcorrencia(ocorrenciaId: string, observacao?
     .eq('id', ocorrenciaId)
     .single()
 
-  if (error || !ocorrencia) throw new Error(error?.message ?? 'Ocorrência não encontrada.')
+  if (error || !ocorrencia) {
+    throw new Error(error?.message ?? 'Ocorrência não encontrada.')
+  }
 
-  const diasOficina = calcularDiasEntre(ocorrencia.data_entrada_oficina, ocorrencia.data_saida_oficina ?? agora)
+  const diasOficina = calcularDiasEntre(
+    ocorrencia.data_entrada_oficina,
+    ocorrencia.data_saida_oficina ?? agora
+  )
+
   const diasTotal = calcularDiasEntre(ocorrencia.criado_em, agora)
 
   const { error: errUpdate } = await supabase
@@ -514,6 +1141,7 @@ export async function validarLiberarOcorrencia(ocorrenciaId: string, observacao?
   if (!pendentes || pendentes.length === 0) {
     const proxima = new Date()
     proxima.setDate(proxima.getDate() + INTERVALO_AUDITORIA_DIAS)
+
     const dataProxima = proxima.toISOString().split('T')[0]
 
     await supabase
@@ -542,13 +1170,20 @@ export async function validarLiberarOcorrencia(ocorrenciaId: string, observacao?
   revalidatePath('/dashboard')
 }
 
-// Uso administrativo emergencial: liberar checklist sem resolver a ocorrência.
-// Mantém o histórico da ocorrência, mas remove o bloqueio operacional do veículo.
-export async function liberarChecklistEmergencial(ocorrenciaId: string, observacao: string) {
+export async function liberarChecklistEmergencial(
+  ocorrenciaId: string,
+  observacao: string
+) {
   const supabase = await createClient()
-  const { data: { user } } = await supabase.auth.getUser()
+  const {
+    data: { user },
+  } = await supabase.auth.getUser()
+
   if (!user) throw new Error('Não autenticado.')
-  if (!observacao.trim()) throw new Error('Informe o motivo da liberação emergencial.')
+
+  if (!observacao.trim()) {
+    throw new Error('Informe o motivo da liberação emergencial.')
+  }
 
   const { data: ocorrencia, error } = await supabase
     .from('ocorrencias')
@@ -556,7 +1191,9 @@ export async function liberarChecklistEmergencial(ocorrenciaId: string, observac
     .eq('id', ocorrenciaId)
     .single()
 
-  if (error || !ocorrencia) throw new Error(error?.message ?? 'Ocorrência não encontrada.')
+  if (error || !ocorrencia) {
+    throw new Error(error?.message ?? 'Ocorrência não encontrada.')
+  }
 
   await supabase
     .from('veiculos')
