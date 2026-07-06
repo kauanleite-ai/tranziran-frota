@@ -1,0 +1,156 @@
+warning: in the working copy of 'src/app/(authenticated)/ocorrencias/page.tsx', LF will be replaced by CRLF the next time Git touches it
+[1mdiff --git a/src/app/(authenticated)/ocorrencias/page.tsx b/src/app/(authenticated)/ocorrencias/page.tsx[m
+[1mindex f9c9062..da865c8 100644[m
+[1m--- a/src/app/(authenticated)/ocorrencias/page.tsx[m
+[1m+++ b/src/app/(authenticated)/ocorrencias/page.tsx[m
+[36m@@ -1,23 +1,139 @@[m
+[31m-import { listarOcorrencias, contadoresOcorrencias } from '@/lib/actions/ocorrencias'[m
+ import { Header } from '@/components/layout/Header'[m
+ import { OcorrenciasCliente } from './OcorrenciasCliente'[m
+[32m+[m[32mimport { createClient } from '@/lib/supabase/server'[m
+[32m+[m
+[32m+[m[32mexport const dynamic = 'force-dynamic'[m
+[32m+[m
+[32m+[m[32mtype Ocorrencia = {[m
+[32m+[m[32m  id: string[m
+[32m+[m[32m  numero: number[m
+[32m+[m[32m  descricao: string[m
+[32m+[m[32m  gravidade: string[m
+[32m+[m[32m  responsavel: string[m
+[32m+[m[32m  prazo: string | null[m
+[32m+[m[32m  status: string[m
+[32m+[m[32m  criado_em: string[m
+[32m+[m[32m  data_resolucao: string | null[m
+[32m+[m[32m  status_tratativa?: string | null[m
+[32m+[m[32m  email_status?: string | null[m
+[32m+[m[32m  email_enviado_em?: string | null[m
+[32m+[m[32m  bloqueante?: boolean | null[m
+[32m+[m[32m  veiculos: {[m
+[32m+[m[32m    id: string[m
+[32m+[m[32m    placa: string[m
+[32m+[m[32m    codigo_frota: string | null[m
+[32m+[m[32m    tipo: string[m
+[32m+[m[32m  } | null[m
+[32m+[m[32m  checklist_items: {[m
+[32m+[m[32m    id: string[m
+[32m+[m[32m    nome: string[m
+[32m+[m[32m  } | null[m
+[32m+[m[32m}[m
+[32m+[m
+[32m+[m[32mconst STATUS_OCORRENCIA_ENCERRADOS = [[m
+[32m+[m[32m  'resolvida',[m
+[32m+[m[32m  'reprovada',[m
+[32m+[m[32m  'cancelada',[m
+[32m+[m[32m][m
+[32m+[m
+[32m+[m[32mconst STATUS_TRATATIVA_ENCERRADOS = [[m
+[32m+[m[32m  'validada_liberada',[m
+[32m+[m[32m  'liberado_apos_validacao',[m
+[32m+[m[32m  'liberada_apos_validacao',[m
+[32m+[m[32m  'cancelada',[m
+[32m+[m[32m][m
+[32m+[m
+[32m+[m[32mfunction getStatusPrincipal(ocorrencia: Ocorrencia) {[m
+[32m+[m[32m  return ocorrencia.status_tratativa || ocorrencia.status[m
+[32m+[m[32m}[m
+[32m+[m
+[32m+[m[32mfunction isEncerrada(ocorrencia: Ocorrencia) {[m
+[32m+[m[32m  const statusPrincipal = getStatusPrincipal(ocorrencia)[m
+[32m+[m
+[32m+[m[32m  return ([m
+[32m+[m[32m    STATUS_OCORRENCIA_ENCERRADOS.includes(ocorrencia.status) ||[m
+[32m+[m[32m    STATUS_TRATATIVA_ENCERRADOS.includes(statusPrincipal)[m
+[32m+[m[32m  )[m
+[32m+[m[32m}[m
+[32m+[m
+[32m+[m[32mfunction isAtiva(ocorrencia: Ocorrencia) {[m
+[32m+[m[32m  return !isEncerrada(ocorrencia)[m
+[32m+[m[32m}[m
+ [m
+ export default async function OcorrenciasPage() {[m
+[31m-  const [ocorrencias, contadores] = await Promise.all([[m
+[31m-    listarOcorrencias().catch(() => []),[m
+[31m-    contadoresOcorrencias().catch(() => ({ abertas: 0, criticas: 0, emAnalise: 0, aguardando: 0 })),[m
+[31m-  ])[m
+[32m+[m[32m  const supabase = await createClient()[m
+[32m+[m
+[32m+[m[32m  const { data, error } = await supabase[m
+[32m+[m[32m    .from('ocorrencias')[m
+[32m+[m[32m    .select(`[m
+[32m+[m[32m      id,[m
+[32m+[m[32m      numero,[m
+[32m+[m[32m      descricao,[m
+[32m+[m[32m      gravidade,[m
+[32m+[m[32m      responsavel,[m
+[32m+[m[32m      prazo,[m
+[32m+[m[32m      status,[m
+[32m+[m[32m      criado_em,[m
+[32m+[m[32m      data_resolucao,[m
+[32m+[m[32m      status_tratativa,[m
+[32m+[m[32m      email_status,[m
+[32m+[m[32m      email_enviado_em,[m
+[32m+[m[32m      bloqueante,[m
+[32m+[m[32m      veiculos:veiculo_id ([m
+[32m+[m[32m        id,[m
+[32m+[m[32m        placa,[m
+[32m+[m[32m        codigo_frota,[m
+[32m+[m[32m        tipo[m
+[32m+[m[32m      ),[m
+[32m+[m[32m      checklist_items:item_id ([m
+[32m+[m[32m        id,[m
+[32m+[m[32m        nome[m
+[32m+[m[32m      )[m
+[32m+[m[32m    `)[m
+[32m+[m[32m    .order('criado_em', { ascending: false })[m
+[32m+[m
+[32m+[m[32m  if (error) {[m
+[32m+[m[32m    console.error('Erro ao buscar ocorrências:', error)[m
+[32m+[m[32m  }[m
+[32m+[m
+[32m+[m[32m  const ocorrencias = (data ?? []) as unknown as Ocorrencia[][m
+[32m+[m
+[32m+[m[32m  const ocorrenciasAtivas = ocorrencias.filter(isAtiva)[m
+[32m+[m
+[32m+[m[32m  const contadores = {[m
+[32m+[m[32m    abertas: ocorrenciasAtivas.length,[m
+[32m+[m[32m    criticas: ocorrenciasAtivas.filter((o) => o.gravidade === 'critica').length,[m
+[32m+[m[32m    emAnalise: ocorrenciasAtivas.filter((o) => {[m
+[32m+[m[32m      const statusPrincipal = getStatusPrincipal(o)[m
+[32m+[m
+[32m+[m[32m      return ([m
+[32m+[m[32m        o.status === 'em_analise' ||[m
+[32m+[m[32m        statusPrincipal === 'em_analise_manutencao'[m
+[32m+[m[32m      )[m
+[32m+[m[32m    }).length,[m
+[32m+[m[32m    aguardando: ocorrenciasAtivas.filter((o) => {[m
+[32m+[m[32m      const statusPrincipal = getStatusPrincipal(o)[m
+[32m+[m
+[32m+[m[32m      return ([m
+[32m+[m[32m        o.status === 'aguardando_manutencao' ||[m
+[32m+[m[32m        statusPrincipal === 'encaminhado_manutencao' ||[m
+[32m+[m[32m        statusPrincipal === 'aguardando_devolutiva_manutencao' ||[m
+[32m+[m[32m        statusPrincipal === 'aguardando_envio_oficina'[m
+[32m+[m[32m      )[m
+[32m+[m[32m    }).length,[m
+[32m+[m[32m  }[m
+ [m
+   return ([m
+[31m-    <div className="flex-1 flex flex-col">[m
+[32m+[m[32m    <>[m
+       <Header[m
+         title="Ocorrências"[m
+[31m-        subtitle={`${contadores.abertas} aberta(s) · ${contadores.criticas} crítica(s)`}[m
+[32m+[m[32m        subtitle={`${contadores.abertas} aberta(s) • ${contadores.criticas} crítica(s)`}[m
+       />[m
+[32m+[m
+       <OcorrenciasCliente[m
+[31m-        ocorrenciasIniciais={ocorrencias as never}[m
+[32m+[m[32m        ocorrenciasIniciais={ocorrencias}[m
+         contadores={contadores}[m
+       />[m
+[31m-    </div>[m
+[32m+[m[32m    </>[m
+   )[m
+[31m-}[m
+[32m+[m[32m}[m
+\ No newline at end of file[m
