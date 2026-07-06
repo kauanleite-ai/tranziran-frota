@@ -157,17 +157,23 @@ export function OcorrenciaDetalheCliente({ dados }: Props) {
     if (!confirm('Reenviar/gerar encaminhamento para manutenção?')) return
     setLoadingMover(true)
     try {
-      const res = await reenviarEmailManutencao(ocorrencia.id)
-      if (res.emailStatus === 'enviado') success('E-mail enviado para manutenção.')
-      else if (res.emailStatus === 'pendente_configuracao') success('Encaminhamento registrado. Configure SMTP ou Resend, EMAIL_FROM e MANUTENCAO_EMAILS para envio real.')
-      else toastError(res.erro ?? 'Não foi possível enviar o e-mail, mas o encaminhamento foi registrado.')
-      router.refresh()
-    } catch (err) {
-      toastError(err instanceof Error ? err.message : 'Erro ao encaminhar ocorrência.')
-    } finally {
-      setLoadingMover(false)
-    }
+     try {
+  const res = await reenviarEmailManutencao(ocorrencia.id)
+
+  if (res.ok) {
+    success('E-mail enviado para manutenção.')
+  } else {
+    toastError(res.erro ?? 'Não foi possível enviar o e-mail.')
   }
+
+  router.refresh()
+} catch (error) {
+  toastError(
+    error instanceof Error
+      ? error.message
+      : 'Não foi possível enviar o e-mail.'
+  )
+}
 
   async function handleEntradaOficina() {
     const obs = prompt('Observação da entrada em oficina:', 'Veículo encaminhado/recebido na oficina para tratativa.')
