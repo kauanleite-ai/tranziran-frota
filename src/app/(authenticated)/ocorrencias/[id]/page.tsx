@@ -16,11 +16,19 @@ type Foto = {
   criado_em: string
 }
 
+function normalizarRelacao<T>(valor: T | T[] | null | undefined): T | null {
+  if (Array.isArray(valor)) {
+    return valor[0] ?? null
+  }
+
+  return valor ?? null
+}
+
 export default async function OcorrenciaDetalhePage({ params }: Props) {
   const { id } = await params
   const supabase = await createClient()
 
-  const { data: ocorrencia, error } = await supabase
+  const { data: ocorrenciaRaw, error } = await supabase
     .from('ocorrencias')
     .select(`
       id,
@@ -82,11 +90,18 @@ export default async function OcorrenciaDetalhePage({ params }: Props) {
     notFound()
   }
 
-  if (!ocorrencia) {
+  if (!ocorrenciaRaw) {
     notFound()
   }
 
-  const { data: historico, error: historicoError } = await supabase
+  const ocorrencia = ocorrenciaRaw as any
+
+  const veiculo = normalizarRelacao(ocorrencia.veiculos)
+  const item = normalizarRelacao(ocorrencia.checklist_items)
+  const checklist = normalizarRelacao(ocorrencia.checklists)
+  const auditoria = normalizarRelacao(ocorrencia.auditorias)
+
+  const { data: historicoRaw, error: historicoError } = await supabase
     .from('ocorrencia_historico')
     .select(`
       id,
@@ -103,10 +118,12 @@ export default async function OcorrenciaDetalhePage({ params }: Props) {
     console.error('Erro ao buscar histórico da ocorrência:', historicoError)
   }
 
+  const historico = (historicoRaw ?? []) as any[]
+
   const userIds = [
     ...new Set(
-      (historico ?? [])
-        .map((item) => item.feito_por)
+      historico
+        .map((movimentacao) => movimentacao.feito_por)
         .filter(Boolean)
     ),
   ]
@@ -114,97 +131,85 @@ export default async function OcorrenciaDetalhePage({ params }: Props) {
   let perfisMap = new Map<string, string>()
 
   if (userIds.length > 0) {
-    const { data: perfis } = await supabase
+    const { data: perfisRaw } = await supabase
       .from('usuarios_perfis')
       .select('user_id, nome')
       .in('user_id', userIds)
 
-    perfisMap = new Map((perfis ?? []).map((p) => [p.user_id, p.nome]))
+    const perfis = (perfisRaw ?? []) as any[]
+
+    perfisMap = new Map(
+      perfis.map((perfil) => [perfil.user_id, perfil.nome])
+    )
   }
 
   const fotosMap = new Map<string, Foto>()
 
-  const { data: fotosDiretas } = await supabase
+  const { data: fotosDiretasRaw } = await supabase
     .from('checklist_fotos')
     .select('id, storage_path, nome_original, criado_em')
     .eq('ocorrencia_id', id)
     .order('criado_em', { ascending: true })
 
-  for (const foto of fotosDiretas ?? []) {
+  const fotosDiretas = (fotosDiretasRaw ?? []) as Foto[]
+
+  for (const foto of fotosDiretas) {
     fotosMap.set(foto.id, foto)
   }
 
-  const origem = ocorrencia as unknown as {
-    checklist_id: string | null
-    auditoria_id: string | null
-    item_id: string | null
-  }
-
-  if (origem.checklist_id && origem.item_id) {
-    const { data: respostasChecklist } = await supabase
+  if (ocorrencia.checklist_id && ocorrencia.item_id) {
+    const { data: respostasChecklistRaw } = await supabase
       .from('checklist_respostas')
       .select('id')
-      .eq('checklist_id', origem.checklist_id)
-      .eq('item_id', origem.item_id)
+      .eq('checklist_id', ocorrencia.checklist_id)
+      .eq('item_id', ocorrencia.item_id)
 
-    const respostaIds = (respostasChecklist ?? []).map((r) => r.id)
+    const respostasChecklist = (respostasChecklistRaw ?? []) as any[]
+    const respostaIds = respostasChecklist.map((resposta) => resposta.id)
 
     if (respostaIds.length > 0) {
-      const { data: fotosOrigem } = await supabase
+      const { data: fotosOrigemRaw } = await supabase
         .from('checklist_fotos')
         .select('id, storage_path, nome_original, criado_em')
         .in('resposta_id', respostaIds)
         .order('criado_em', { ascending: true })
 
-      for (const foto of fotosOrigem ?? []) {
+      const fotosOrigem = (fotosOrigemRaw ?? []) as Foto[]
+
+      for (const foto of fotosOrigem) {
         fotosMap.set(foto.id, foto)
       }
     }
   }
 
-  if (origem.auditoria_id && origem.item_id) {
-    const { data: respostasAuditoria } = await supabase
+  if (ocorrencia.auditoria_id && ocorrencia.item_id) {
+    const { data: respostasAuditoriaRaw } = await supabase
       .from('auditoria_respostas')
       .select('id')
-      .eq('auditoria_id', origem.auditoria_id)
-      .eq('item_id', origem.item_id)
+      .eq('auditoria_id', ocorrencia.auditoria_id)
+      .eq('item_id', ocorrencia.item_id)
 
-    const respostaIds = (respostasAuditoria ?? []).map((r) => r.id)
+    const respostasAuditoria = (respostasAuditoriaRaw ?? []) as any[]
+    const respostaIds = respostasAuditoria.map((resposta) => resposta.id)
 
     if (respostaIds.length > 0) {
-      const { data: fotosOrigem } = await supabase
+      const { data: fotosOrigemRaw } = await supabase
         .from('checklist_fotos')
         .select('id, storage_path, nome_original, criado_em')
         .in('resposta_id', respostaIds)
         .order('criado_em', { ascending: true })
 
-      for (const foto of fotosOrigem ?? []) {
+      const fotosOrigem = (fotosOrigemRaw ?? []) as Foto[]
+
+      for (const foto of fotosOrigem) {
         fotosMap.set(foto.id, foto)
       }
     }
   }
-
-    const ocorrenciaAny = ocorrencia as any
-
-  const veiculo = Array.isArray(ocorrenciaAny.veiculos)
-    ? ocorrenciaAny.veiculos[0] ?? null
-    : ocorrenciaAny.veiculos ?? null
-
-  const item = Array.isArray(ocorrenciaAny.checklist_items)
-    ? ocorrenciaAny.checklist_items[0] ?? null
-    : ocorrenciaAny.checklist_items ?? null
-
-  const checklist = Array.isArray(ocorrenciaAny.checklists)
-    ? ocorrenciaAny.checklists[0] ?? null
-    : ocorrenciaAny.checklists ?? null
-
-  const auditoria = Array.isArray(ocorrenciaAny.auditorias)
-    ? ocorrenciaAny.auditorias[0] ?? null
-    : ocorrenciaAny.auditorias ?? null
 
   const dados = {
     ocorrencia: {
-      ...ocorrenciaAny,
+      ...ocorrencia,
       veiculos: veiculo,
       checklist_items: item
         ? {
@@ -215,14 +220,14 @@ export default async function OcorrenciaDetalhePage({ params }: Props) {
       checklists: checklist,
       auditorias: auditoria,
     },
-    historico: (historico ?? []).map((item) => ({
-      id: item.id,
-      status_anterior: item.status_anterior,
-      status_novo: item.status_novo,
-      observacao: item.observacao,
-      criado_em: item.criado_em,
-      nome_usuario: item.feito_por
-        ? perfisMap.get(item.feito_por) ?? 'Usuário'
+    historico: historico.map((movimentacao) => ({
+      id: movimentacao.id,
+      status_anterior: movimentacao.status_anterior,
+      status_novo: movimentacao.status_novo,
+      observacao: movimentacao.observacao,
+      criado_em: movimentacao.criado_em,
+      nome_usuario: movimentacao.feito_por
+        ? perfisMap.get(movimentacao.feito_por) ?? 'Usuário'
         : 'Sistema',
     })),
     fotos: [...fotosMap.values()].sort(
@@ -232,3 +237,15 @@ export default async function OcorrenciaDetalhePage({ params }: Props) {
   }
 
   const placa = veiculo?.placa
+
+  return (
+    <div className="flex-1 flex flex-col">
+      <Header
+        title={`Ocorrência #${ocorrencia.numero}`}
+        subtitle={placa ? `Veículo ${placa}` : 'Detalhes e tratamento'}
+      />
+
+      <OcorrenciaDetalheCliente dados={dados as never} />
+    </div>
+  )
+}
