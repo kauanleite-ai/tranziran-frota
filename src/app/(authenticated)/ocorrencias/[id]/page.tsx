@@ -184,15 +184,36 @@ export default async function OcorrenciaDetalhePage({ params }: Props) {
     }
   }
 
+    const ocorrenciaAny = ocorrencia as any
+
+  const veiculo = Array.isArray(ocorrenciaAny.veiculos)
+    ? ocorrenciaAny.veiculos[0] ?? null
+    : ocorrenciaAny.veiculos ?? null
+
+  const item = Array.isArray(ocorrenciaAny.checklist_items)
+    ? ocorrenciaAny.checklist_items[0] ?? null
+    : ocorrenciaAny.checklist_items ?? null
+
+  const checklist = Array.isArray(ocorrenciaAny.checklists)
+    ? ocorrenciaAny.checklists[0] ?? null
+    : ocorrenciaAny.checklists ?? null
+
+  const auditoria = Array.isArray(ocorrenciaAny.auditorias)
+    ? ocorrenciaAny.auditorias[0] ?? null
+    : ocorrenciaAny.auditorias ?? null
+
   const dados = {
     ocorrencia: {
-      ...ocorrencia,
-      checklist_items: ocorrencia.checklist_items
+      ...ocorrenciaAny,
+      veiculos: veiculo,
+      checklist_items: item
         ? {
-            ...ocorrencia.checklist_items,
+            ...item,
             checklist_categorias: null,
           }
         : null,
+      checklists: checklist,
+      auditorias: auditoria,
     },
     historico: (historico ?? []).map((item) => ({
       id: item.id,
@@ -210,16 +231,4 @@ export default async function OcorrenciaDetalhePage({ params }: Props) {
     ),
   }
 
-  const placa = ocorrencia.veiculos?.placa
-
-  return (
-    <div className="flex-1 flex flex-col">
-      <Header
-        title={`Ocorrência #${ocorrencia.numero}`}
-        subtitle={placa ? `Veículo ${placa}` : 'Detalhes e tratamento'}
-      />
-
-      <OcorrenciaDetalheCliente dados={dados as never} />
-    </div>
-  )
-}
+  const placa = veiculo?.placa
